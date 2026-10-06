@@ -5,7 +5,16 @@ import cookieParser from 'cookie-parser';
 import { AppDataSource } from './config/database';
 
 const app = express();
-app.use(cors({ origin: 'http://localhost:3000', credentials: true }));
+const corsOrigins = (
+  process.env.CORS_ORIGINS || 'http://localhost:3000'
+)
+  .split(',')
+  .map(origin => origin.trim());
+
+app.use(cors({
+  origin: corsOrigins,
+  credentials: true
+}));
 app.use(express.json());
 app.use(cookieParser());
 
