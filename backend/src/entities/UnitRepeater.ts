@@ -21,7 +21,8 @@ export class UnitRepeater {
   @JoinColumn({ name: 'repeaterId' })
   repeater: Repeater;
 
-  @Column({ default: true })
+  // La tabla creada por InitialSchema utiliza la columna 'active'.
+  @Column({ name: 'active', default: true })
   enabled: boolean;
 
   @Column({ type: 'json', nullable: true })

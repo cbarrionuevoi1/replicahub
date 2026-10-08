@@ -1,591 +1,255 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Activity,
-  CheckCircle2,
-  ChevronRight,
-  Clock3,
-  Database,
-  Eye,
-  EyeOff,
-  KeyRound,
-  LockKeyhole,
-  RadioTower,
-  RefreshCcw,
-  Save,
-  Search,
-  Server,
-  Settings,
-  ShieldCheck,
-  Truck,
-  WifiOff,
+  ArrowLeft, Check, ChevronRight, CircleAlert, Eye, EyeOff, KeyRound,
+  Loader2, Plus, RadioTower, RefreshCw, Save, Search, ShieldCheck, Truck,
 } from 'lucide-react';
+import { apiUrl } from '@/lib/api';
 import { useAuth } from '@/components/AuthProvider';
 
+type Unit = { id: string; plate: string; alias: string | null; active: boolean };
+type Repeater = {
+  id: string; name: string; type: 'SUTRAN'; active: boolean; tokenConfigured: boolean;
+  endpointConfigured: boolean; unitIds: string[]; createdAt: string;
+};
+type Transmission = { id: string; plate: string; status: string; httpCode?: number | null; eventTime: string | null; createdAt: string };
 type Tab = 'resumen' | 'unidades' | 'transmisiones' | 'ajustes';
 
-const tabs: Array<{ id: Tab; label: string }> = [
-  { id: 'resumen', label: 'Resumen' },
-  { id: 'unidades', label: 'Unidades' },
-  { id: 'transmisiones', label: 'Transmisiones' },
-  { id: 'ajustes', label: 'Ajustes' },
-];
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(apiUrl(`/api${path}`), {
+    credentials: 'include', cache: 'no-store', ...init,
+    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || `Error HTTP ${response.status}`);
+  return data as T;
+}
+
+const inputClass = 'w-full rounded-xl border border-border bg-white px-3 py-2.5 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/10';
+const btnPrimary = 'inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50';
+const btnSecondary = 'inline-flex items-center justify-center gap-2 rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-semibold text-gray-700 hover:bg-gray-50';
 
 export default function RepeaterManager() {
   const { user } = useAuth();
   const isAdmin = user?.role === 'ADMIN';
-  const [activeTab, setActiveTab] = useState<Tab>('resumen');
-  const [showToken, setShowToken] = useState(false);
+  const [repeaters, setRepeaters] = useState<Repeater[]>([]);
+  const [units, setUnits] = useState<Unit[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [tab, setTab] = useState<Tab>('resumen');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [search, setSearch] = useState('');
-  const [endpoint, setEndpoint] = useState('');
+  const [filterAll, setFilterAll] = useState('');
+  const [filterAssigned, setFilterAssigned] = useState('');
+  const [checkedAll, setCheckedAll] = useState<string[]>([]);
+  const [checkedAssigned, setCheckedAssigned] = useState<string[]>([]);
+  const [draftUnitIds, setDraftUnitIds] = useState<string[]>([]);
+  const [name, setName] = useState('SUTRAN');
   const [token, setToken] = useState('');
-  const [timeoutMs, setTimeoutMs] = useState('10000');
-  const [retries, setRetries] = useState('3');
-  const [notice, setNotice] = useState<string | null>(null);
+  const [showToken, setShowToken] = useState(false);
+  const [transmissions, setTransmissions] = useState<Transmission[]>([]);
+  const selected = repeaters.find(r => r.id === selectedId) ?? null;
 
-  const visibleTabs = useMemo(
-    () => tabs.filter((tab) => tab.id !== 'ajustes' || isAdmin),
-    [isAdmin]
-  );
+  const reload = useCallback(async () => {
+    setLoading(true); setError('');
+    try {
+      const [loadedRepeaters, loadedUnits] = await Promise.all([
+        request<Repeater[]>('/repeaters'), request<Unit[]>('/repeaters/available-units'),
+      ]);
+      setRepeaters(loadedRepeaters);
+      setUnits(loadedUnits);
+      setSelectedId(prev => loadedRepeaters.some(r => r.id === prev) ? prev : (loadedRepeaters[0]?.id ?? null));
+    } catch (err) { setError(message(err)); }
+    finally { setLoading(false); }
+  }, []);
 
-  function previewSave() {
-    setNotice('Vista previa: los cambios todavía no se guardan en la base de datos.');
-    window.setTimeout(() => setNotice(null), 3200);
+  useEffect(() => { void reload(); }, [reload]);
+  useEffect(() => {
+    if (!creating && selected) { setDraftUnitIds(selected.unitIds); setName(selected.name); }
+    setCheckedAll([]); setCheckedAssigned([]); setFilterAll(''); setFilterAssigned('');
+    setToken(''); setShowToken(false);
+  }, [selectedId, creating]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!selectedId || creating || tab !== 'transmisiones') return;
+    let active = true;
+    request<Transmission[]>(`/repeaters/${selectedId}/transmissions`)
+      .then(rows => { if (active) setTransmissions(rows); })
+      .catch(err => { if (active) setError(message(err)); });
+    return () => { active = false; };
+  }, [selectedId, creating, tab]);
+
+  const allAvailable = useMemo(() => units.filter(u => !draftUnitIds.includes(u.id) && `${u.plate} ${u.alias ?? ''}`.toLowerCase().includes(filterAll.toLowerCase())), [units, draftUnitIds, filterAll]);
+  const assigned = useMemo(() => units.filter(u => draftUnitIds.includes(u.id) && `${u.plate} ${u.alias ?? ''}`.toLowerCase().includes(filterAssigned.toLowerCase())), [units, draftUnitIds, filterAssigned]);
+  const filteredRepeaters = repeaters.filter(r => r.name.toLowerCase().includes(search.toLowerCase()));
+  const hasUnitChanges = !!selected && ([...draftUnitIds].sort().join('|') !== [...selected.unitIds].sort().join('|'));
+
+  function showSuccess(value: string) { setNotice(value); setError(''); }
+  function showError(err: unknown) { setError(message(err)); setNotice(''); }
+  function newRepeater() {
+    setCreating(true); setSelectedId(null); setName('SUTRAN'); setToken('');
+    setDraftUnitIds([]); setTab('ajustes'); setNotice(''); setError('');
+  }
+  function cancelNew() {
+    setCreating(false); setSelectedId(repeaters[0]?.id ?? null);
+    setNotice(''); setError(''); setTab('resumen');
+  }
+  function moveToAssigned(ids: string[]) {
+    setDraftUnitIds(current => [...new Set([...current, ...ids])]); setCheckedAll([]);
+  }
+  function moveToAvailable(ids: string[]) {
+    setDraftUnitIds(current => current.filter(id => !ids.includes(id))); setCheckedAssigned([]);
   }
 
-  return (
-    <div className="space-y-6">
-      <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-        <div>
-          <p className="text-sm font-medium text-primary">Gestión de destinos</p>
-          <h1 className="mt-1 text-3xl font-bold tracking-tight text-gray-900">Repetidores</h1>
-        </div>
+  async function saveNew() {
+    if (!isAdmin || !creating || saving) return;
+    if (name.trim().length < 4) return setError('El nombre debe tener al menos 4 caracteres.');
+    if (!token.trim()) return setError('El token de SUTRAN es obligatorio.');
+    setSaving(true); setError('');
+    try {
+      const created = await request<Repeater>('/repeaters', {
+        method: 'POST', body: JSON.stringify({ name: name.trim(), type: 'SUTRAN', token: token.trim(), unitIds: draftUnitIds }),
+      });
+      setCreating(false); setToken(''); setRepeaters(current => [created, ...current]);
+      setSelectedId(created.id); setTab('resumen'); showSuccess('Repetidor SUTRAN creado correctamente.');
+    } catch (err) { showError(err); }
+    finally { setSaving(false); }
+  }
+  async function saveSettings() {
+    if (!isAdmin || !selected || saving) return;
+    if (name.trim().length < 4) return setError('El nombre debe tener al menos 4 caracteres.');
+    setSaving(true); setError('');
+    try {
+      const payload: { name: string; token?: string } = { name: name.trim() };
+      if (token.trim()) payload.token = token.trim();
+      const result = await request<Repeater>(`/repeaters/${selected.id}`, { method: 'PATCH', body: JSON.stringify(payload) });
+      setRepeaters(current => current.map(r => r.id === result.id ? result : r));
+      setToken(''); showSuccess('Configuración guardada. El token no se mostrará nuevamente.');
+    } catch (err) { showError(err); }
+    finally { setSaving(false); }
+  }
+  async function saveUnits() {
+    if (!selected || saving) return;
+    setSaving(true); setError('');
+    try {
+      const response = await request<{ unitIds: string[] }>(`/repeaters/${selected.id}/units`, {
+        method: 'PUT', body: JSON.stringify({ unitIds: draftUnitIds }),
+      });
+      setRepeaters(current => current.map(r => r.id === selected.id ? { ...r, unitIds: response.unitIds } : r));
+      showSuccess('Unidades asignadas correctamente.');
+    } catch (err) { showError(err); }
+    finally { setSaving(false); }
+  }
+  async function toggleActive() {
+    if (!selected || !isAdmin || saving) return;
+    setSaving(true); setError('');
+    try {
+      const result = await request<Repeater>(`/repeaters/${selected.id}`, {
+        method: 'PATCH', body: JSON.stringify({ active: !selected.active }),
+      });
+      setRepeaters(current => current.map(r => r.id === result.id ? result : r));
+      showSuccess(result.active ? 'Repetidor activado.' : 'Repetidor desactivado.');
+    } catch (err) { showError(err); }
+    finally { setSaving(false); }
+  }
 
-        <div className="inline-flex items-center gap-2 self-start rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700">
-          <Clock3 size={15} />
-          Vista previa · aún no conectado al servicio de réplica
+  if (!user) return <div className="p-6 text-sm text-muted">Validando sesión...</div>;
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold text-primary">Gestión de destinos</p>
+          <h1 className="mt-1 text-3xl font-bold text-gray-900">Repetidores</h1>
+          <p className="mt-1 text-sm text-muted">Protocolos habilitados: SUTRAN</p>
+        </div>
+        <div className="flex gap-2">
+          <button className={btnSecondary} type="button" onClick={() => void reload()} disabled={loading}><RefreshCw size={16} /> Actualizar</button>
+          {isAdmin && !creating && <button className={btnPrimary} type="button" onClick={newRepeater}><Plus size={17} /> Nuevo repetidor</button>}
         </div>
       </div>
-
-      <div className="grid min-h-[calc(100vh-13rem)] grid-cols-1 gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
-        <aside className="flex min-h-[620px] flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
+      {error && <div role="alert" className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700"><CircleAlert size={18} className="shrink-0"/>{error}</div>}
+      {notice && <div role="status" className="flex items-start gap-2 rounded-xl border border-green-200 bg-green-50 p-3 text-sm text-green-800"><Check size={18} className="shrink-0"/>{notice}</div>}
+      <div className="grid gap-5 xl:grid-cols-[295px_minmax(0,1fr)]">
+        <aside className="overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
           <div className="border-b border-border p-4">
-            <div className="mb-3 flex items-center justify-between">
-              <div>
-                <p className="font-bold text-gray-900">Destinos</p>
-                <p className="text-xs text-muted">1 configurado en diseño</p>
-              </div>
-              <Server size={19} className="text-primary" />
-            </div>
-
-            <div className="relative">
-              <Search
-                size={17}
-                className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
-              />
-              <input
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder="Buscar repetidor..."
-                className="w-full rounded-xl border border-border bg-white py-2.5 pl-9 pr-3 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/10"
-              />
-            </div>
+            <div className="flex items-center justify-between"><h2 className="font-bold text-gray-900">Destinos</h2><RadioTower size={19} className="text-primary"/></div>
+            <div className="relative mt-3"><Search size={15} className="absolute left-3 top-3 text-gray-400"/><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Buscar repetidor..." className={`${inputClass} pl-9`}/></div>
           </div>
-
-          <div className="flex-1 p-3">
-            {(!search || 'sutran'.includes(search.toLowerCase())) && (
-              <button
-                type="button"
-                className="w-full rounded-xl border border-primary/20 bg-primary/5 p-4 text-left transition hover:border-primary/40"
-              >
-                <div className="flex items-start gap-3">
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary text-white shadow-sm">
-                    <RadioTower size={20} />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="font-bold text-gray-900">SUTRAN</p>
-                      <ChevronRight size={17} className="text-primary" />
-                    </div>
-                    <p className="mt-1 text-xs text-muted">Superintendencia de Transporte</p>
-                    <div className="mt-3 flex items-center gap-2">
-                      <span className="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-semibold text-amber-700">
-                        <WifiOff size={12} /> Sin conectar
-                      </span>
-                      <span className="rounded-full bg-gray-100 px-2.5 py-1 text-[11px] font-semibold text-gray-600">
-                        TOKEN
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              </button>
-            )}
+          <div className="space-y-2 p-3">
+            {loading && <p className="p-3 text-sm text-muted">Consultando PostgreSQL...</p>}
+            {!loading && filteredRepeaters.length === 0 && <p className="p-3 text-sm text-muted">No hay repetidores SUTRAN registrados.</p>}
+            {filteredRepeaters.map(r => <button key={r.id} type="button" onClick={() => { setCreating(false); setSelectedId(r.id); setTab('resumen'); setNotice(''); setError(''); }} className={`w-full rounded-xl border p-4 text-left transition ${selectedId === r.id && !creating ? 'border-primary/30 bg-primary/5' : 'border-transparent hover:bg-gray-50'}`}>
+              <div className="flex items-center justify-between gap-2"><span className="font-semibold text-gray-900">{r.name}</span><ChevronRight size={16} className="text-primary"/></div>
+              <p className="mt-1 text-xs text-muted">SUTRAN · {r.unitIds.length} unidades</p>
+              <span className={`mt-2 inline-block rounded-full px-2 py-1 text-xs font-semibold ${r.active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>{r.active ? 'Activo' : 'Inactivo'}</span>
+            </button>)}
           </div>
-
         </aside>
-
         <section className="min-w-0 overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
-          <div className="border-b border-border p-6">
-            <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
-              <div className="flex items-start gap-4">
-                <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-primary text-white shadow-lg shadow-primary/15">
-                  <RadioTower size={24} />
-                </div>
-                <div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h2 className="text-2xl font-bold text-gray-900">SUTRAN</h2>
-                    <span className="rounded-full bg-gray-100 px-2.5 py-1 text-[11px] font-bold tracking-wide text-gray-600">
-                      SUTRAN
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-xs font-semibold text-gray-600">
-                  <span className="h-2 w-2 rounded-full bg-gray-400" />
-                  Servicio no conectado
-                </span>
-                {isAdmin && (
-                  <button
-                    type="button"
-                    onClick={() => setActiveTab('ajustes')}
-                    className="inline-flex items-center gap-2 rounded-xl border border-border bg-white px-3 py-2 text-xs font-semibold text-gray-700 transition hover:border-primary/40 hover:text-primary"
-                  >
-                    <Settings size={15} /> Ajustes
-                  </button>
-                )}
-              </div>
+          {creating ? (
+            <div className="p-6">
+              <button type="button" onClick={cancelNew} className="mb-5 inline-flex items-center gap-2 text-sm text-muted hover:text-primary"><ArrowLeft size={16}/> Volver</button>
+              <h2 className="mb-1 text-2xl font-bold text-gray-900">Nuevo repetidor</h2>
+              <p className="mb-6 text-sm text-muted">SUTRAN es el único protocolo disponible actualmente.</p>
+              <BasicFields name={name} onName={setName} token={token} onToken={setToken} showToken={showToken} toggleToken={() => setShowToken(v => !v)} tokenRequired />
+              <div className="mt-6"><h3 className="mb-3 font-bold">Asignar unidades</h3><UnitSelector all={allAvailable} assigned={assigned} checkedAll={checkedAll} checkedAssigned={checkedAssigned} setCheckedAll={setCheckedAll} setCheckedAssigned={setCheckedAssigned} filterAll={filterAll} setFilterAll={setFilterAll} filterAssigned={filterAssigned} setFilterAssigned={setFilterAssigned} add={moveToAssigned} remove={moveToAvailable}/></div>
+              <div className="mt-6 flex justify-end gap-2"><button type="button" onClick={cancelNew} className={btnSecondary}>Cancelar</button><button disabled={saving} onClick={() => void saveNew()} className={btnPrimary}>{saving && <Loader2 size={16} className="animate-spin"/>}<Save size={16}/> Crear repetidor</button></div>
             </div>
-          </div>
-
-          <div className="border-b border-border px-6">
-            <div className="flex gap-1 overflow-x-auto">
-              {visibleTabs.map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  onClick={() => setActiveTab(tab.id)}
-                  className={`relative whitespace-nowrap px-4 py-4 text-sm font-semibold transition ${activeTab === tab.id
-                    ? 'text-primary'
-                    : 'text-muted hover:text-gray-900'
-                    }`}
-                >
-                  {tab.label}
-                  {activeTab === tab.id && (
-                    <span className="absolute inset-x-3 bottom-0 h-0.5 rounded-full bg-primary" />
-                  )}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="p-6">
-            {activeTab === 'resumen' && <SummaryView />}
-            {activeTab === 'unidades' && <UnitsView />}
-            {activeTab === 'transmisiones' && <TransmissionsView />}
-            {activeTab === 'ajustes' && isAdmin && (
-              <SettingsView
-                endpoint={endpoint}
-                setEndpoint={setEndpoint}
-                token={token}
-                setToken={setToken}
-                showToken={showToken}
-                setShowToken={setShowToken}
-                timeoutMs={timeoutMs}
-                setTimeoutMs={setTimeoutMs}
-                retries={retries}
-                setRetries={setRetries}
-                onSave={previewSave}
-              />
-            )}
-          </div>
+          ) : selected ? (
+            <>
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-6">
+                <div className="flex items-center gap-3"><div className="rounded-xl bg-primary p-3 text-white"><RadioTower size={21}/></div><div><h2 className="text-xl font-bold text-gray-900">{selected.name}</h2><p className="text-xs text-muted">SUTRAN · {selected.unitIds.length} unidades asignadas</p></div></div>
+                <span className={`rounded-full px-3 py-1.5 text-xs font-semibold ${selected.active && selected.tokenConfigured && selected.endpointConfigured ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>{selected.active && selected.tokenConfigured && selected.endpointConfigured ? 'Configurado (envíos no verificados)' : 'Inactivo o pendiente de configuración'}</span>
+              </div>
+              <div className="flex overflow-x-auto border-b border-border px-4">{([{ id: 'resumen', label: 'Resumen' },{ id: 'unidades', label: 'Unidades' },{ id: 'transmisiones', label: 'Transmisiones' },...(isAdmin ? [{ id: 'ajustes', label: 'Configuración' }] : [])] as { id: Tab; label: string }[]).map(item => <button key={item.id} type="button" onClick={() => {setTab(item.id); setError(''); setNotice('');}} className={`whitespace-nowrap border-b-2 px-4 py-3 text-sm font-semibold ${tab === item.id ? 'border-primary text-primary' : 'border-transparent text-muted hover:text-gray-800'}`}>{item.label}</button>)}</div>
+              <div className="p-6">
+                {tab === 'resumen' && <div className="space-y-5"><div className="grid gap-4 md:grid-cols-3"><Stat label="Protocolo" value="SUTRAN"/><Stat label="Unidades asignadas" value={String(selected.unitIds.length)}/><Stat label="Token" value={selected.tokenConfigured ? 'Configurado' : 'Pendiente'}/></div><div className="rounded-xl border border-border p-4 text-sm text-gray-700"><p><strong>Endpoint interno:</strong> {selected.endpointConfigured ? 'Configurado en el servidor' : 'Pendiente en el servidor'}</p><p className="mt-2"><strong>Estado:</strong> {selected.active ? 'Activo' : 'Inactivo'}</p><p className="mt-2 text-muted">La creación del repetidor no inicia los envíos. La cola/dispatcher debe conectarse al servicio SUTRAN para transmitir las tramas.</p></div>{isAdmin && <button type="button" onClick={() => void toggleActive()} disabled={saving} className={btnSecondary}>{selected.active ? 'Desactivar repetidor' : 'Activar repetidor'}</button>}</div>}
+                {tab === 'unidades' && <><UnitSelector all={allAvailable} assigned={assigned} checkedAll={checkedAll} checkedAssigned={checkedAssigned} setCheckedAll={setCheckedAll} setCheckedAssigned={setCheckedAssigned} filterAll={filterAll} setFilterAll={setFilterAll} filterAssigned={filterAssigned} setFilterAssigned={setFilterAssigned} add={moveToAssigned} remove={moveToAvailable}/><div className="mt-5 flex justify-end"><button disabled={!hasUnitChanges || saving} onClick={() => void saveUnits()} className={btnPrimary}><Save size={16}/> Guardar asignaciones</button></div></>}
+                {tab === 'transmisiones' && <><h3 className="mb-3 font-bold text-gray-900">Últimas transmisiones registradas</h3><div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr className="border-b border-border text-xs text-muted"><th className="p-3">Placa</th><th className="p-3">Estado</th><th className="p-3">HTTP</th><th className="p-3">Fecha</th></tr></thead><tbody>{transmissions.map(t => <tr key={t.id} className="border-b border-border/60"><td className="p-3 font-medium">{t.plate}</td><td className="p-3">{t.status}</td><td className="p-3">{t.httpCode ?? '—'}</td><td className="p-3">{new Date(t.createdAt).toLocaleString('es-PE')}</td></tr>)}</tbody></table>{transmissions.length === 0 && <p className="p-4 text-sm text-muted">Aún no hay transmisiones registradas para este repetidor.</p>}</div></>}
+                {tab === 'ajustes' && isAdmin && <><BasicFields name={name} onName={setName} token={token} onToken={setToken} showToken={showToken} toggleToken={() => setShowToken(v => !v)} tokenConfigured={selected.tokenConfigured}/><div className="mt-5 flex items-center justify-between gap-3"><p className="flex items-center gap-2 text-xs text-muted"><ShieldCheck size={16}/> El token se almacena cifrado y nunca se devuelve al navegador.</p><button disabled={saving} onClick={() => void saveSettings()} className={btnPrimary}><Save size={16}/> Guardar configuración</button></div></>}
+              </div>
+            </>
+          ) : (
+            <div className="p-10 text-center"><RadioTower size={32} className="mx-auto mb-3 text-primary"/><h2 className="text-xl font-bold">Sin repetidores configurados</h2><p className="mt-2 text-sm text-muted">{isAdmin ? 'Crea tu primer repetidor SUTRAN con un token.' : 'Solicita al administrador que configure SUTRAN.'}</p>{isAdmin && <button className={`${btnPrimary} mt-5`} onClick={newRepeater}><Plus size={17}/> Nuevo repetidor</button>}</div>
+          )}
         </section>
       </div>
-
-      {notice && (
-        <div className="fixed bottom-6 right-6 z-50 max-w-sm rounded-xl border border-primary/20 bg-white px-4 py-3 text-sm font-medium text-gray-700 shadow-xl">
-          <div className="flex items-start gap-2">
-            <CheckCircle2 size={18} className="mt-0.5 shrink-0 text-primary" />
-            {notice}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
 
-function SummaryView() {
-  return (
-    <div className="space-y-6">
-      <div className="grid gap-4 sm:grid-cols-2 2xl:grid-cols-4">
-        <MetricCard
-          icon={<WifiOff size={20} />}
-          label="Estado del servicio"
-          value="Sin conectar"
-          detail="Pendiente de integrar con Repeaters Service"
-        />
-        <MetricCard
-          icon={<Truck size={20} />}
-          label="Unidades asignadas"
-          value="0"
-          detail="Todavía no hay unidades vinculadas"
-        />
-        <MetricCard
-          icon={<Activity size={20} />}
-          label="Último envío"
-          value="—"
-          detail="Sin transmisiones registradas"
-        />
-        <MetricCard
-          icon={<KeyRound size={20} />}
-          label="Autenticación"
-          value="Token"
-          detail="Header: access-token"
-        />
-      </div>
-
-      <div className="grid gap-6 lg:grid-cols-2">
-        <div className="rounded-2xl border border-border p-5">
-          <div className="mb-5 flex items-center justify-between">
-            <div>
-              <h3 className="font-bold text-gray-900">Configuración esperada</h3>
-              <p className="mt-1 text-xs text-muted">La configuración real se guardará después en PostgreSQL.</p>
-            </div>
-            <Settings size={19} className="text-gray-400" />
-          </div>
-
-          <div className="divide-y divide-border text-sm">
-            <InfoRow label="Tipo" value="SUTRAN" />
-            <InfoRow label="Método" value="POST" />
-            <InfoRow label="Autenticación" value="Token por header" />
-            <InfoRow label="Header" value="access-token" mono />
-            <InfoRow label="Timeout" value="10 000 ms" />
-            <InfoRow label="Reintentos" value="3" />
-          </div>
-        </div>
-
-        <div className="rounded-2xl border border-border p-5">
-          <div className="mb-5 flex items-center justify-between">
-            <div>
-              <h3 className="font-bold text-gray-900">Flujo de réplica</h3>
-              <p className="mt-1 text-xs text-muted">Cómo quedará conectado cuando integremos los servicios.</p>
-            </div>
-            <Database size={19} className="text-gray-400" />
-          </div>
-
-          <div className="space-y-3">
-            {[
-              'Posición normalizada por ReplicaHub',
-              'Validación de placa y coordenadas',
-              'Conversión al formato SUTRAN',
-              'Envío con token configurado por ADMIN',
-              'Registro de respuesta e intentos',
-            ].map((item, index) => (
-              <div key={item} className="flex items-center gap-3 rounded-xl bg-gray-50 px-3 py-3 text-sm text-gray-700">
-                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-bold text-primary">
-                  {index + 1}
-                </span>
-                {item}
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function UnitsView() {
-  return (
-    <div className="overflow-hidden rounded-2xl border border-border">
-      <div className="flex flex-col gap-3 border-b border-border bg-gray-50/60 p-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h3 className="font-bold text-gray-900">Unidades asignadas a SUTRAN</h3>
-        </div>
-        <button
-          type="button"
-          disabled
-          className="rounded-xl bg-gray-200 px-4 py-2 text-sm font-semibold text-gray-500"
-        >
-          + Asignar unidad
-        </button>
-      </div>
-
-      <div className="flex min-h-72 flex-col items-center justify-center p-8 text-center">
-        <Truck size={42} className="mb-4 text-gray-300" />
-        <p className="font-semibold text-gray-800">Aún no hay unidades asignadas</p>
-        <p className="mt-2 max-w-md text-sm text-muted">
-          Cuando creemos la base operacional podrás seleccionar cliente, placa e IMEI y habilitar SUTRAN para cada unidad.
-        </p>
-      </div>
-    </div>
-  );
-}
-
-function TransmissionsView() {
-  return (
-    <div className="overflow-hidden rounded-2xl border border-border">
-      <div className="border-b border-border bg-gray-50/60 p-4">
-        <h3 className="font-bold text-gray-900">Últimas transmisiones SUTRAN</h3>
-      </div>
-
-      <div className="flex min-h-72 flex-col items-center justify-center p-8 text-center">
-        <Activity size={42} className="mb-4 text-gray-300" />
-        <p className="font-semibold text-gray-800">Sin transmisiones todavía</p>
-        <p className="mt-2 max-w-md text-sm text-muted">
-          Esta vista se alimentará de las tablas de transmisiones cuando integremos PostgreSQL y el dispatcher.
-        </p>
-      </div>
-    </div>
-  );
-}
-
-interface SettingsViewProps {
-  endpoint: string;
-  setEndpoint: (value: string) => void;
-  token: string;
-  setToken: (value: string) => void;
-  showToken: boolean;
-  setShowToken: (value: boolean) => void;
-  timeoutMs: string;
-  setTimeoutMs: (value: string) => void;
-  retries: string;
-  setRetries: (value: string) => void;
-  onSave: () => void;
-}
-
-function SettingsView({
-  endpoint,
-  setEndpoint,
-  token,
-  setToken,
-  showToken,
-  setShowToken,
-  timeoutMs,
-  setTimeoutMs,
-  retries,
-  setRetries,
-  onSave,
-}: SettingsViewProps) {
-  return (
-    <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
-      <div className="rounded-2xl border border-border p-5">
-        <div className="mb-6">
-          <div className="flex items-center gap-2">
-            <Settings size={19} className="text-primary" />
-            <h3 className="font-bold text-gray-900">Configuración SUTRAN</h3>
-          </div>
-          <p className="mt-2 text-sm text-muted">
-            Esta vista ya representa cómo el ADMIN configurará el destino. Todavía no persiste información.
-          </p>
-        </div>
-
-        <div className="space-y-5">
-          <Field label="Nombre del repetidor">
-            <input
-              value="SUTRAN"
-              disabled
-              className="w-full rounded-xl border border-border bg-gray-50 px-3 py-2.5 text-sm text-gray-600"
-            />
-          </Field>
-
-          <Field label="Endpoint">
-            <input
-              value={endpoint}
-              onChange={(event) => setEndpoint(event.target.value)}
-              placeholder="https://..."
-              className="w-full rounded-xl border border-border px-3 py-2.5 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/10"
-            />
-          </Field>
-
-          <div className="grid gap-4 md:grid-cols-2">
-            <Field label="Método HTTP">
-              <input
-                value="POST"
-                disabled
-                className="w-full rounded-xl border border-border bg-gray-50 px-3 py-2.5 text-sm font-semibold text-gray-600"
-              />
-            </Field>
-            <Field label="Tipo de autenticación">
-              <input
-                value="TOKEN_HEADER"
-                disabled
-                className="w-full rounded-xl border border-border bg-gray-50 px-3 py-2.5 text-sm font-semibold text-gray-600"
-              />
-            </Field>
-          </div>
-
-          <Field label="Header del token">
-            <input
-              value="access-token"
-              disabled
-              className="w-full rounded-xl border border-border bg-gray-50 px-3 py-2.5 font-mono text-sm text-gray-600"
-            />
-          </Field>
-
-          <Field label="Token SUTRAN" helper="Solo los administradores podrán establecer o reemplazar este secreto.">
-            <div className="relative">
-              <input
-                type={showToken ? 'text' : 'password'}
-                value={token}
-                onChange={(event) => setToken(event.target.value)}
-                placeholder="Ingresa el token"
-                autoComplete="off"
-                className="w-full rounded-xl border border-border py-2.5 pl-3 pr-11 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/10"
-              />
-              <button
-                type="button"
-                onClick={() => setShowToken(!showToken)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 transition hover:text-gray-700"
-                aria-label={showToken ? 'Ocultar token' : 'Mostrar token'}
-              >
-                {showToken ? <EyeOff size={18} /> : <Eye size={18} />}
-              </button>
-            </div>
-          </Field>
-
-          <div className="grid gap-4 md:grid-cols-2">
-            <Field label="Timeout (ms)">
-              <input
-                type="number"
-                min="1000"
-                value={timeoutMs}
-                onChange={(event) => setTimeoutMs(event.target.value)}
-                className="w-full rounded-xl border border-border px-3 py-2.5 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/10"
-              />
-            </Field>
-            <Field label="Máximo de reintentos">
-              <input
-                type="number"
-                min="0"
-                max="10"
-                value={retries}
-                onChange={(event) => setRetries(event.target.value)}
-                className="w-full rounded-xl border border-border px-3 py-2.5 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/10"
-              />
-            </Field>
-          </div>
-
-          <div className="flex flex-col gap-3 border-t border-border pt-5 sm:flex-row sm:items-center sm:justify-between">
-            <p className="text-xs text-muted">
-              Guardar aún es demostrativo; la persistencia vendrá con las tablas repeaters y repeater_secrets.
-            </p>
-            <button
-              type="button"
-              onClick={onSave}
-              className="inline-flex items-center justify-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-primary/90"
-            >
-              <Save size={17} /> Guardar configuración
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <div className="space-y-4">
-        <div className="rounded-2xl border border-primary/15 bg-primary/5 p-5">
-          <div className="flex items-center gap-2 text-primary">
-            <ShieldCheck size={19} />
-            <h4 className="font-bold">Seguridad</h4>
-          </div>
-          <p className="mt-3 text-sm leading-relaxed text-gray-700">
-            El token no deberá quedar visible en el frontend después de guardarlo. El backend devolverá únicamente el estado “Token configurado”.
-          </p>
-        </div>
-
-        <div className="rounded-2xl border border-border p-5">
-          <div className="flex items-center gap-2 text-gray-800">
-            <LockKeyhole size={18} className="text-gray-500" />
-            <h4 className="font-bold">Permisos</h4>
-          </div>
-          <div className="mt-4 space-y-3 text-sm">
-            <PermissionRow label="Ver SUTRAN" admin operator />
-            <PermissionRow label="Asignar unidades" admin operator />
-            <PermissionRow label="Activar réplica" admin operator />
-            <PermissionRow label="Editar endpoint" admin />
-            <PermissionRow label="Modificar token" admin />
-          </div>
-        </div>
-
-        <button
-          type="button"
-          disabled
-          className="flex w-full items-center justify-center gap-2 rounded-xl border border-border bg-gray-50 px-4 py-3 text-sm font-semibold text-gray-400"
-        >
-          <RefreshCcw size={16} /> Probar conexión · próximo paso
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function MetricCard({
-  icon,
-  label,
-  value,
-  detail,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-  detail: string;
+function message(err: unknown) { return err instanceof Error ? err.message : 'Ocurrió un error inesperado.'; }
+function Stat({ label, value }: { label: string; value: string }) { return <div className="rounded-xl border border-border p-4"><p className="text-xs text-muted">{label}</p><p className="mt-2 text-lg font-bold text-gray-900">{value}</p></div>; }
+function BasicFields({ name, onName, token, onToken, showToken, toggleToken, tokenRequired = false, tokenConfigured = false }: {
+  name: string; onName: (v: string) => void; token: string; onToken: (v: string) => void;
+  showToken: boolean; toggleToken: () => void; tokenRequired?: boolean; tokenConfigured?: boolean;
 }) {
-  return (
-    <div className="rounded-2xl border border-border bg-white p-4">
-      <div className="mb-4 flex h-9 w-9 items-center justify-center rounded-xl bg-primary/10 text-primary">
-        {icon}
-      </div>
-      <p className="text-xs font-semibold uppercase tracking-wide text-muted">{label}</p>
-      <p className="mt-1 text-lg font-bold text-gray-900">{value}</p>
-      <p className="mt-2 text-xs leading-relaxed text-muted">{detail}</p>
-    </div>
-  );
+  return <div className="space-y-4 rounded-xl border border-border p-5"><h3 className="font-bold text-gray-900">Básicas</h3>
+    <label className="block"><span className="mb-1.5 block text-sm font-semibold">Nombre (mínimo 4 caracteres)</span><input className={inputClass} value={name} maxLength={120} onChange={e => onName(e.target.value)}/></label>
+    <label className="block"><span className="mb-1.5 block text-sm font-semibold">Protocolo de repetidor</span><select className={inputClass} value="SUTRAN" disabled><option value="SUTRAN">SUTRAN</option></select></label>
+    <label className="block"><span className="mb-1.5 flex items-center gap-2 text-sm font-semibold"><KeyRound size={16}/>Token de acceso {tokenRequired && <span className="text-red-500">*</span>}</span><div className="relative"><input className={`${inputClass} pr-11`} type={showToken ? 'text' : 'password'} value={token} onChange={e => onToken(e.target.value)} placeholder={tokenConfigured ? 'Dejar vacío para mantener el token actual' : 'Ingresa el token SUTRAN'} autoComplete="off"/><button type="button" onClick={toggleToken} className="absolute right-3 top-2.5 text-gray-500" aria-label={showToken ? 'Ocultar token' : 'Mostrar token'}>{showToken ? <EyeOff size={18}/> : <Eye size={18}/>}</button></div></label>
+    <p className="text-xs text-muted">SUTRAN solo requiere el token. La URL, el encabezado HTTP y los reintentos se gestionan internamente.</p>
+  </div>;
 }
-
-function InfoRow({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
-  return (
-    <div className="flex items-center justify-between gap-4 py-3">
-      <span className="text-muted">{label}</span>
-      <span className={`text-right font-semibold text-gray-800 ${mono ? 'font-mono text-xs' : ''}`}>{value}</span>
-    </div>
-  );
-}
-
-function Field({
-  label,
-  helper,
-  children,
-}: {
-  label: string;
-  helper?: string;
-  children: React.ReactNode;
+function UnitSelector({ all, assigned, checkedAll, checkedAssigned, setCheckedAll, setCheckedAssigned, filterAll, setFilterAll, filterAssigned, setFilterAssigned, add, remove }: {
+  all: Unit[]; assigned: Unit[]; checkedAll: string[]; checkedAssigned: string[];
+  setCheckedAll: (v: string[]) => void; setCheckedAssigned: (v: string[]) => void;
+  filterAll: string; setFilterAll: (v: string) => void; filterAssigned: string; setFilterAssigned: (v: string) => void;
+  add: (v: string[]) => void; remove: (v: string[]) => void;
 }) {
-  return (
-    <label className="block">
-      <span className="mb-2 block text-sm font-semibold text-gray-800">{label}</span>
-      {children}
-      {helper && <span className="mt-1.5 block text-xs text-muted">{helper}</span>}
-    </label>
-  );
+  return <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_52px_minmax(0,1fr)]">
+    <UnitList title="Todas las unidades" items={all} search={filterAll} setSearch={setFilterAll} selected={checkedAll} setSelected={setCheckedAll}/>
+    <div className="flex items-center justify-center gap-2 md:flex-col"><button className={btnSecondary} title="Asignar seleccionadas" aria-label="Asignar seleccionadas" type="button" disabled={!checkedAll.length} onClick={() => add(checkedAll)}><ChevronRight size={18}/></button><button className={btnSecondary} title="Quitar seleccionadas" aria-label="Quitar seleccionadas" type="button" disabled={!checkedAssigned.length} onClick={() => remove(checkedAssigned)}><ChevronRight className="rotate-180" size={18}/></button></div>
+    <UnitList title="Unidades para repetidor" items={assigned} search={filterAssigned} setSearch={setFilterAssigned} selected={checkedAssigned} setSelected={setCheckedAssigned}/>
+  </div>;
 }
-
-function PermissionRow({
-  label,
-  admin = false,
-  operator = false,
-}: {
-  label: string;
-  admin?: boolean;
-  operator?: boolean;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-3">
-      <span className="text-gray-600">{label}</span>
-      <div className="flex items-center gap-1.5 text-[10px] font-bold">
-        {admin && <span className="rounded-md bg-primary/10 px-2 py-1 text-primary">ADMIN</span>}
-        {operator && <span className="rounded-md bg-gray-100 px-2 py-1 text-gray-600">OPERATOR</span>}
-      </div>
-    </div>
-  );
+function UnitList({ title, items, search, setSearch, selected, setSelected }: { title: string; items: Unit[]; search: string; setSearch: (v: string) => void; selected: string[]; setSelected: (v: string[]) => void }) {
+  const ids = items.map(x => x.id);
+  const allSelected = ids.length > 0 && ids.every(id => selected.includes(id));
+  return <div className="min-w-0 space-y-2"><div className="flex items-center justify-between gap-1"><p className="text-sm font-semibold text-gray-800">{title}</p><span className="text-xs text-muted">{items.length}</span></div><div className="relative"><Search size={14} className="absolute left-3 top-3 text-gray-400"/><input value={search} onChange={e => setSearch(e.target.value)} className={`${inputClass} pl-9`} placeholder="Buscar placa..."/></div><div className="h-48 overflow-auto rounded-xl border border-border bg-white p-2">{items.map(u => <label key={u.id} className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-sm hover:bg-gray-50"><input type="checkbox" checked={selected.includes(u.id)} onChange={() => setSelected(selected.includes(u.id) ? selected.filter(x => x !== u.id) : [...selected, u.id])}/><Truck size={13} className="text-gray-400"/><span className="font-medium">{u.plate}</span>{!u.active && <span className="text-xs text-muted">Inactiva</span>}</label>)}{items.length === 0 && <p className="p-3 text-sm text-muted">Sin unidades</p>}</div><button type="button" className="w-full rounded-lg border border-border p-2 text-xs font-semibold text-primary hover:bg-primary/5" onClick={() => setSelected(allSelected ? selected.filter(id => !ids.includes(id)) : [...new Set([...selected, ...ids])])}>{allSelected ? 'Deseleccionar todo' : 'Seleccionar todo'}</button></div>;
 }

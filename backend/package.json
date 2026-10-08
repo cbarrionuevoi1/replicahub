@@ -17,6 +17,7 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@replicahub/repeaters": "file:../services/repeaters",
     "axios": "^1.20.0",
     "bcrypt": "^6.0.0",
     "bullmq": "^6.3.11",

@@ -12,7 +12,7 @@ export class Client {
   @Column({ nullable: true })
   businessName: string;
 
-  @Column({ nullable: true })
+  @Column({ nullable: true, unique: true })
   ruc: string;
 
   @Column({ nullable: true })

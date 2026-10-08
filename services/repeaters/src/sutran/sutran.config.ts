@@ -11,7 +11,8 @@ export const SUTRAN_DEFAULTS = {
 
 /**
  * Manifiesto para que el backend/frontend puedan generar la pantalla de Ajustes.
- * El token es secreto y debe persistirse cifrado. Solo ADMIN debe poder modificarlo.
+ * Solo se solicita el token al usuario. Endpoint y parámetros técnicos se configuran internamente.
+ * El token debe persistirse cifrado; solo ADMIN puede modificarlo.
  */
 export const SUTRAN_MANIFEST = {
   code: 'SUTRAN',
@@ -25,19 +26,13 @@ export const SUTRAN_MANIFEST = {
     secretFields: [
       {
         key: 'token',
-        label: 'Access token',
+        label: 'Token SUTRAN',
         masked: true,
         required: true,
       },
     ],
   },
-  settings: [
-    { key: 'endpointUrl', label: 'Endpoint', type: 'url', required: true, adminOnly: true },
-    { key: 'timeoutMs', label: 'Timeout (ms)', type: 'number', required: true, adminOnly: true },
-    { key: 'maxRetries', label: 'Reintentos', type: 'number', required: true, adminOnly: true },
-    { key: 'apiVersion', label: 'Versión API', type: 'select', options: ['v1', 'v2'], adminOnly: true },
-    { key: 'batchSize', label: 'Tramas por petición', type: 'number', min: 1, max: 5000, adminOnly: true },
-  ],
+  settings: [], // Sin campos técnicos en el formulario público.
 } as const;
 
 export function withSutranDefaults(config: SutranRuntimeConfig): SutranRuntimeConfig {

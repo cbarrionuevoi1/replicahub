@@ -7,7 +7,8 @@ export class Unit {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ unique: true })
+  // Para unidades registradas automáticamente, la placa puede ser nula inicialmente.
+  @Column({ unique: true, nullable: true })
   plate: string;
 
   @Column({ unique: true })
@@ -22,6 +23,9 @@ export class Unit {
 
   @Column({ nullable: true })
   alias: string;
+
+  @Column({ default: 'MANUAL' })
+  origin: string; // 'MANUAL' o 'AUTO'
 
   @Column({ default: true })
   active: boolean;
