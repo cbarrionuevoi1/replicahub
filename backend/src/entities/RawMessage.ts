@@ -13,4 +13,22 @@ export class RawMessage {
 
   @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
   receivedAt: Date;
+
+  @Column({ nullable: true })
+  ipAddress: string;
+
+  @Column({ type: 'uuid', nullable: true })
+  unitId: string;
+
+  @Column({ type: 'uuid', nullable: true })
+  clientId: string;
+
+  @Column({ default: 'PROCESSED' })
+  status: string; // 'PROCESSED', 'UNIDENTIFIED', 'ERROR'
+
+  @Column({ type: 'text', nullable: true })
+  errorMessage: string;
+
+  @Column({ type: 'json', nullable: true })
+  decodedData: any;
 }

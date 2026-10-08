@@ -14,6 +14,9 @@ export class Unit {
   @Column({ unique: true })
   imei: string;
 
+  @Column({ unique: true, nullable: true })
+  wialonUniqueId: string;
+
   @ManyToOne(() => Client, client => client.units, { nullable: true, onDelete: 'SET NULL' })
   @JoinColumn({ name: 'clientId' })
   client: Client;
