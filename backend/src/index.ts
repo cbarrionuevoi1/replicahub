@@ -4,6 +4,9 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import { AppDataSource } from './config/database';
 
+if (process.env.NODE_ENV === 'production' && (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32 || ['supersecret','CHANGE_ME'].includes(process.env.JWT_SECRET))) {
+  throw new Error('Configura JWT_SECRET seguro antes de iniciar en producción.');
+}
 const app = express();
 const corsOrigins = (
   process.env.CORS_ORIGINS || 'http://localhost:3000'

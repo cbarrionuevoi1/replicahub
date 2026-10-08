@@ -1,4 +1,6 @@
 import { Router } from 'express';
+import { AppDataSource } from '../config/database';
+import { dashboardStats, listTransmissions, transmissionDetail, retryTransmission } from '../controllers/monitor.controller';
 import { exportTransmissions } from '../controllers/export.controller';
 import { listUsers, createUser, updateUser, deleteUser, resetPassword, getPermissions, changePassword } from '../controllers/user.controller';
 import { requireAuth } from '../middleware/auth.middleware';
@@ -11,9 +13,17 @@ import clientRoutes from './client.routes';
 const router = Router();
 
 // Health check
-router.get('/health', (req, res) => {
-  res.json({ status: 'edited', service: 'ReplicaHub API', version: '1.0' });
+router.get('/health', async (_req, res) => {
+  try {
+    await AppDataSource.query('SELECT 1');
+    res.json({ status: 'ok', service: 'ReplicaHub API', database: 'connected' });
+  } catch { res.status(503).json({ status: 'error', database: 'unavailable' }); }
 });
+
+router.get('/stats/dashboard', requireAuth, dashboardStats);
+router.get('/transmissions', requireAuth, listTransmissions);
+router.get('/transmissions/:id', requireAuth, transmissionDetail);
+router.post('/transmissions/:id/retry', requireAuth, requireRole(UserRole.ADMIN, UserRole.OPERATOR), retryTransmission);
 
 router.get('/transmissions/export', requireAuth, exportTransmissions);
 

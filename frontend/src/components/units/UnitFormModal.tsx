@@ -42,7 +42,7 @@ export function UnitFormModal({ onClose, onSuccess, clients, units = [], editing
       if (isPending && mode === 'associate') {
         if (!associateData.unitId) return setError('Seleccione una unidad');
         
-        const res = await fetch(apiUrl(`/api/units/pending/${editingUnit.imei}/associate`), {
+        const res = await fetch(apiUrl(`/api/units/pending/${encodeURIComponent(editingUnit.imei)}/associate`), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
@@ -70,12 +70,13 @@ export function UnitFormModal({ onClose, onSuccess, clients, units = [], editing
         // But backend doesn't automatically process historical on create. So let's call associate if isPending:
         if (isPending) {
           const createdUnit = await res.json();
-          await fetch(apiUrl(`/api/units/pending/${editingUnit.imei}/associate`), {
+          const assocRes = await fetch(apiUrl(`/api/units/pending/${encodeURIComponent(editingUnit.imei)}/associate`), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'include',
             body: JSON.stringify({ unitId: createdUnit.id, updateHistorical: associateData.updateHistorical }),
           });
+          if (!assocRes.ok) throw new Error((await assocRes.json()).error || 'La unidad se creó, pero falló la asociación histórica.');
         }
       }
 

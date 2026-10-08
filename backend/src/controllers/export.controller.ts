@@ -10,12 +10,14 @@ const buildQuery = (req: Request) => {
   const { clientId, plate, imei, repeaterId, status, dateFrom, dateTo } = req.query;
   const qb = AppDataSource.getRepository(Transmission)
     .createQueryBuilder('t')
+    .leftJoin('units', 'u', 'u.id = t.unitId')
     .select([
       't.id', 't.plate', 't.imei', 't.clientName', 't.repeaterName',
       't.status', 't.httpCode', 't.attempts', 't.eventTime',
       't.receivedAt', 't.durationMs', 't.createdAt'
     ]);
 
+  if (clientId) qb.andWhere('u.clientId = :clientId', { clientId });
   if (plate) qb.andWhere('t.plate ILIKE :plate', { plate: `%${plate}%` });
   if (imei) qb.andWhere('t.imei ILIKE :imei', { imei: `%${imei}%` });
   if (repeaterId) qb.andWhere('t.repeaterId = :repeaterId', { repeaterId });
@@ -29,6 +31,7 @@ const buildQuery = (req: Request) => {
 export const exportTransmissions = async (req: Request, res: Response) => {
   const { format } = req.query;
   const user = (req as any).user;
+  if (format !== 'xlsx' && format !== 'csv') return res.status(400).json({ error: 'Usa format=xlsx o format=csv.' });
 
   try {
     const qb = buildQuery(req);

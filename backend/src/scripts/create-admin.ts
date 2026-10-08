@@ -8,7 +8,10 @@ async function run() {
   const name = process.env.ADMIN_NAME || 'Admin';
   const email = process.env.ADMIN_EMAIL || 'admin@replicahub.com';
   const username = process.env.ADMIN_USERNAME || 'admin';
-  const password = process.env.ADMIN_PASSWORD || 'admin123';
+  const password = process.env.ADMIN_PASSWORD;
+  if (!password || password.length < 12 || password.length > 128) {
+    throw new Error('Configura ADMIN_PASSWORD con 12 a 128 caracteres antes de crear el administrador.');
+  }
 
   const userRepo = AppDataSource.getRepository(User);
   const existing = await userRepo.findOne({ where: [{ username }, { email }] });

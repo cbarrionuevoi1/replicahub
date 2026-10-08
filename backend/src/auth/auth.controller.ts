@@ -16,13 +16,16 @@ const COOKIE_OPTIONS = {
 };
 
 export const login = async (req: Request, res: Response) => {
-  const { login: loginId, password } = req.body;
+  const { login: loginId, password } = req.body ?? {};
+  if (typeof loginId !== 'string' || typeof password !== 'string' || !loginId.trim() || !password) {
+    return res.status(400).json({ error: 'Usuario y contraseña obligatorios.' });
+  }
   const ip = req.ip || req.socket.remoteAddress || '';
   
   try {
     const { user, token } = await AuthService.login(loginId, password, ip);
     res.cookie('accessToken', token, COOKIE_OPTIONS);
-    res.json({ user, token });
+    res.json({ user }); // El token no se expone a JavaScript: cookie HTTP-only.
   } catch (error: any) {
     res.status(401).json({ error: error.message });
   }

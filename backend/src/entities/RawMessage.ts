@@ -8,6 +8,9 @@ export class RawMessage {
   @Column()
   imei: string;
 
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  messageHash: string | null;
+
   @Column({ type: 'text' })
   rawData: string;
 

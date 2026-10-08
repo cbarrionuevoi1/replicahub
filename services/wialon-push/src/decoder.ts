@@ -7,6 +7,7 @@ export function decodeWialonPayload(payload: Buffer) {
     uidEnd++;
   }
   const uid = payload.toString('ascii', offset, uidEnd);
+  if (uidEnd === payload.length || !uid) throw new Error('Identificador Wialon vacío o sin terminador NUL');
   offset = uidEnd + 1; // skip null byte
 
   if (offset + 8 > payload.length) {
@@ -26,7 +27,7 @@ export function decodeWialonPayload(payload: Buffer) {
 
   // Read blocks
   while (offset < payload.length) {
-    if (offset + 6 > payload.length) break; // Not enough for basic block header
+    if (offset + 6 > payload.length) throw new Error('Bloque Wialon incompleto');
     
     // Block type (2 bytes, Big Endian)
     const blockType = payload.readUInt16BE(offset);
@@ -36,9 +37,7 @@ export function decodeWialonPayload(payload: Buffer) {
     const blockSize = payload.readInt32BE(offset);
     offset += 4;
 
-    if (offset + blockSize > payload.length) {
-      break; // Block size exceeds payload
-    }
+    if (blockSize < 3 || offset + blockSize > payload.length) throw new Error('Tamaño de bloque Wialon inválido');
 
     const blockStart = offset;
     const stealth = payload.readUInt8(offset);
@@ -52,6 +51,7 @@ export function decodeWialonPayload(payload: Buffer) {
     while (nameEnd < blockStart + blockSize && payload[nameEnd] !== 0x00) {
       nameEnd++;
     }
+    if (nameEnd === blockStart + blockSize) throw new Error('Nombre de bloque sin terminador NUL');
     const blockName = payload.toString('ascii', offset, nameEnd);
     offset = nameEnd + 1;
 
@@ -78,6 +78,10 @@ export function decodeWialonPayload(payload: Buffer) {
             course: dataBuf.readInt16BE(26),
             satellites: dataBuf.readUInt8(28)
           };
+          if (![posinfo.latitude, posinfo.longitude, posinfo.speed, posinfo.course, posinfo.altitude].every(Number.isFinite) ||
+              Math.abs(posinfo.latitude) > 90 || Math.abs(posinfo.longitude) > 180) {
+            throw new Error('Coordenadas/valores GPS inválidos');
+          }
           blockValue = posinfo;
         } else {
           blockValue = dataBuf.toString('hex');
@@ -97,5 +101,6 @@ export function decodeWialonPayload(payload: Buffer) {
     decodedData.blocks.push({ name: blockName, type: dataType, value: blockValue, stealth });
   }
 
+  if (time <= 0) throw new Error('Timestamp Wialon inválido');
   return { uid, time, flags, decodedData, posinfo };
 }

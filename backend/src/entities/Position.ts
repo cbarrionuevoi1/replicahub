@@ -6,6 +6,9 @@ export class Position {
   id: string;
 
   @Column({ type: 'uuid', nullable: true })
+  rawMessageId: string | null;
+
+  @Column({ type: 'uuid', nullable: true })
   unitId: string;
 
   @Column()

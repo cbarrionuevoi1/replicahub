@@ -11,11 +11,13 @@ import { validateSutranConfig } from './sutran.validator';
 
 function sutranResponseIndicatesFailure(body: unknown): boolean {
   if (!body || typeof body !== 'object') return false;
-  const value = body as SutranResponseLike;
-
-  const status = Number(value.status ?? value.code);
+  const value = body as SutranResponseLike & { success?: boolean; ok?: boolean; error?: unknown };
+  if (value.success === false || value.ok === false || value.error === true ||
+      (typeof value.error === 'string' && value.error.trim().length > 0)) return true;
+  const rawStatus = value.status ?? value.code;
+  const status = Number(rawStatus);
   if (Number.isFinite(status) && status >= 400) return true;
-
+  if (typeof rawStatus === 'string' && ['ERROR', 'FAILED', 'REJECTED', 'DENIED'].includes(rawStatus.toUpperCase())) return true;
   return false;
 }
 
@@ -142,7 +144,9 @@ export class SutranService implements RepeaterAdapter<SutranRuntimeConfig> {
       return {
         status: 'REJECTED',
         ok: false,
-        retryable: isRetryableHttpStatus(response.status),
+        retryable: isRetryableHttpStatus(response.status) ||
+          (body.data !== null && typeof body.data === 'object' &&
+           isRetryableHttpStatus(Number((body.data as SutranResponseLike).status ?? (body.data as SutranResponseLike).code))),
         httpStatus: response.status,
         durationMs: Date.now() - startedAt,
         payload,

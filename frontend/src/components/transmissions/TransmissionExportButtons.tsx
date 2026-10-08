@@ -6,7 +6,9 @@ import { apiUrl } from '@/lib/api';
 
 type ExportFormat = 'xlsx' | 'csv';
 
-export default function TransmissionExportButtons() {
+export default function TransmissionExportButtons({ clientId = '', repeaterId = '', status = '' }: {
+  clientId?: string; repeaterId?: string; status?: string;
+}) {
   const [exporting, setExporting] = useState<ExportFormat | null>(null);
   const [error, setError] = useState('');
 
@@ -19,8 +21,12 @@ export default function TransmissionExportButtons() {
     setExporting(format);
 
     try {
+      const params = new URLSearchParams({format});
+      if (clientId) params.set('clientId', clientId);
+      if (repeaterId) params.set('repeaterId', repeaterId);
+      if (status) params.set('status', status);
       const response = await fetch(
-        apiUrl(`/api/transmissions/export?format=${encodeURIComponent(format)}`),
+        apiUrl(`/api/transmissions/export?${params}`),
         {
           method: 'GET',
           credentials: 'include',

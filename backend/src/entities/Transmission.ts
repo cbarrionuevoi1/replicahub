@@ -32,8 +32,14 @@ export class Transmission {
   @Column({ type: 'int', nullable: true })
   durationMs: number;
 
-  @Column({ default: 1 })
+  @Column({ default: 0 })
   attempts: number;
+
+  @Column({ type: 'timestamp', nullable: true })
+  nextAttemptAt: Date | null;
+
+  @Column({ type: 'timestamp', nullable: true })
+  processingStartedAt: Date | null;
 
   @Column({ type: 'timestamp', nullable: true })
   eventTime: Date;

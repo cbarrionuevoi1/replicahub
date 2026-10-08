@@ -86,7 +86,6 @@ export const createRepeater = async (req: Request, res: Response) => {
   if (repeaterName.length < 4 || repeaterName.length > 120) return res.status(400).json({ error: 'El nombre debe tener entre 4 y 120 caracteres.' });
   if (!isValidToken(token)) return res.status(400).json({ error: 'Ingresa un token SUTRAN válido.' });
   if (!parsedUnitIds) return res.status(400).json({ error: 'Lista de unidades inválida.' });
-  console.log("SUTRAN URL IN CONTROLLER:", process.env.SUTRAN_ENDPOINT_URL);
   if (!process.env.SUTRAN_ENDPOINT_URL?.trim()) return res.status(503).json({ error: 'El servidor aún no tiene SUTRAN_ENDPOINT_URL configurado.' });
   try {
     if (new URL(process.env.SUTRAN_ENDPOINT_URL).protocol !== 'https:') return res.status(503).json({ error: 'El endpoint SUTRAN debe usar HTTPS.' });

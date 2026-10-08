@@ -9,8 +9,8 @@ module.exports = {
       watch: false,
       max_memory_restart: '200M',
       env: {
-        NODE_ENV: 'production',
-        DRY_RUN: 'true'
+        // Respeta DRY_RUN del .env (por seguridad por defecto simula).
+        NODE_ENV: 'production'
       }
     }
   ]

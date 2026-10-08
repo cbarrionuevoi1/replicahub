@@ -15,14 +15,12 @@ const pool = new Pool({
 
 async function bootstrap() {
   try {
-    await pool.connect();
+    await pool.query('SELECT 1');
     console.log('[App] Connected to PostgreSQL');
+    // Compatibilidad: trabajos PROCESSING de la versión antigua no tenían marca temporal.
+    await pool.query(`UPDATE transmissions SET status='RETRY'
+      WHERE status='PROCESSING' AND "processingStartedAt" IS NULL`);
 
-    // Reset any jobs stuck in PROCESSING from a previous crash
-    const { rowCount } = await pool.query(`UPDATE transmissions SET status = 'PENDING' WHERE status = 'PROCESSING'`);
-    if (rowCount && rowCount > 0) {
-      console.log(`[App] Recovered ${rowCount} jobs stuck in PROCESSING state.`);
-    }
 
     const dispatcher = new Dispatcher(pool);
     const worker = new Worker(pool);

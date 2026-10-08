@@ -1,154 +1,138 @@
+import { createDecipheriv } from 'crypto';
 import { Pool } from 'pg';
-import { SutranService, NormalizedPosition } from '@replicahub/repeaters';
+import { SutranService, NormalizedPosition, SutranRuntimeConfig, RepeaterSendResult } from '@replicahub/repeaters';
 
-// Registry of adapters. Can be expanded dynamically later
-const ADAPTERS: Record<string, any> = {
-  'SUTRAN': new SutranService(),
-};
+const adapters = { SUTRAN: new SutranService() };
+const MAX_BATCH = 20;
+
+export function decryptRepeaterToken(encrypted: string): string {
+  const keyHex = process.env.REPEATER_ENCRYPTION_KEY?.trim() ?? '';
+  if (!/^[a-f0-9]{64}$/i.test(keyHex)) throw new Error('REPEATER_ENCRYPTION_KEY no configurada o inválida.');
+  const parts = encrypted.split(':');
+  if (parts.length !== 4 || parts[0] !== 'v1') throw new Error('Token cifrado de SUTRAN inválido.');
+  const iv = Buffer.from(parts[1], 'base64');
+  const tag = Buffer.from(parts[2], 'base64');
+  if (iv.length !== 12 || tag.length !== 16) throw new Error('Token cifrado de SUTRAN inválido.');
+  const decipher = createDecipheriv('aes-256-gcm', Buffer.from(keyHex, 'hex'), iv);
+  decipher.setAuthTag(tag);
+  return Buffer.concat([decipher.update(Buffer.from(parts[3], 'base64')), decipher.final()]).toString('utf8');
+}
+
+function runtimeForSutran(row: any): SutranRuntimeConfig {
+  if (!row.active || !row.assignmentActive || !row.unitActive) throw new Error('REPEATER_DISABLED');
+  const auth = row.auth || {};
+  if (typeof auth.tokenEncrypted !== 'string') throw new Error('Falta token cifrado SUTRAN.');
+  const url = String(process.env.SUTRAN_ENDPOINT_URL || row.url || '').trim();
+  return {
+    repeaterId: row.id, name: row.name, code: 'SUTRAN',
+    endpointUrl: url, method: 'POST', active: true,
+    timeoutMs: Number(row.timeout) || 10000,
+    maxRetries: Math.max(0, Number(row.maxRetries) || 0),
+    auth: { type: 'TOKEN_HEADER', headerName: 'access-token', token: decryptRepeaterToken(auth.tokenEncrypted) },
+    headers: row.headers || {}, config: { apiVersion: 'v1', batchSize: 1, includeImei: true, ...(row.config || {}), ...(row.unitConfig || {}) },
+  };
+}
 
 export class Worker {
-  private pool: Pool;
   private isRunning = false;
+  constructor(private readonly pool: Pool) {}
 
-  constructor(pool: Pool) {
-    this.pool = pool;
-  }
-
-  async poll() {
+  async poll(): Promise<void> {
     if (this.isRunning) return;
     this.isRunning = true;
-
     try {
-      // 1. Lock a batch of pending/retry jobs safely for concurrent environments
-      const lockQuery = `
-        UPDATE transmissions
-        SET status = 'PROCESSING'
-        WHERE id IN (
+      // Una sola sentencia atómica para múltiples workers. Reclamaciones antiguas
+      // se recuperan tras 5 minutos sin resetear trabajos activos de otros procesos.
+      const { rows: jobs } = await this.pool.query(`
+        UPDATE transmissions t
+        SET status = 'PROCESSING', "processingStartedAt" = NOW()
+        FROM (
           SELECT id FROM transmissions
-          WHERE status IN ('PENDING', 'RETRY')
-          ORDER BY "createdAt" ASC
-          LIMIT 50
-          FOR UPDATE SKIP LOCKED
-        )
-        RETURNING *;
-      `;
-      const { rows: jobs } = await this.pool.query(lockQuery);
-      if (jobs.length === 0) return;
-
-      console.log(`[Worker] Processing ${jobs.length} jobs...`);
-
-      // 2. Process jobs in parallel
-      await Promise.all(jobs.map(job => this.processJob(job)));
-
-    } catch (err) {
-      console.error('[Worker] Poll error:', err);
+          WHERE (status IN ('PENDING', 'RETRY') AND ("nextAttemptAt" IS NULL OR "nextAttemptAt" <= NOW()))
+             OR (status = 'PROCESSING' AND "processingStartedAt" < NOW() - interval '5 minutes')
+          ORDER BY "createdAt", id LIMIT $1 FOR UPDATE SKIP LOCKED
+        ) pending
+        WHERE t.id = pending.id RETURNING t.*
+      `, [MAX_BATCH]);
+      await Promise.all(jobs.map(job => this.processJob(job).catch(err =>
+        console.error(`[Worker] No se pudo guardar el resultado de ${job.id}:`, err))));
+    } catch (error) {
+      console.error('[Worker] Error de cola:', error);
     } finally {
       this.isRunning = false;
     }
   }
 
-  private async processJob(job: any) {
-    let newStatus = 'FAILED';
-    let httpCode = null;
-    let durationMs = null;
-    let payloadSent = null;
-    let responseReceived = null;
-    let errorText = null;
-
+  private async processJob(job: any): Promise<void> {
+    let status = 'FAILED';
+    let result: RepeaterSendResult | null = null;
+    let error: string | null = null;
+    let maxAttempts = 1;
     try {
-      // 1. Fetch the repeater configuration and code
-      const { rows: repeaters } = await this.pool.query(`SELECT type AS code, config FROM repeaters WHERE id = $1`, [job.repeaterId]);
-      if (repeaters.length === 0) throw new Error('Repeater not found');
-      
-      const repeaterCode = repeaters[0].code;
-      const baseConfig = repeaters[0].config;
-
-      // 2. Fetch the specific unit_repeater config (e.g. overrides, auth token)
-      const { rows: unitRepeaters } = await this.pool.query(`SELECT config FROM unit_repeaters WHERE "unitId" = $1 AND "repeaterId" = $2`, [job.unitId, job.repeaterId]);
-      const unitConfig = unitRepeaters.length > 0 ? unitRepeaters[0].config : {};
-
-      // Merge configs (Unit specific overrides base)
-      const runtimeConfig = { ...baseConfig, ...unitConfig };
-
-      // 3. Fetch Position data
+      const { rows } = await this.pool.query(`
+        SELECT r.*, ur.config AS "unitConfig", ur.active AS "assignmentActive", u.active AS "unitActive"
+        FROM repeaters r
+        LEFT JOIN unit_repeaters ur ON ur."repeaterId" = r.id AND ur."unitId" = $2
+        LEFT JOIN units u ON u.id = $2
+        WHERE r.id = $1
+      `, [job.repeaterId, job.unitId]);
+      if (!rows.length) throw new Error('Repetidor no encontrado.');
+      const repeater = rows[0];
+      if (!repeater.active || !repeater.assignmentActive || !repeater.unitActive) {
+        status = 'SKIPPED';
+        throw new Error('Unidad, asignación o repetidor desactivado.');
+      }
+      maxAttempts = Math.max(1, Number(repeater.maxRetries ?? 3) + 1);
+      if (repeater.type !== 'SUTRAN') throw new Error(`Adaptador no implementado: ${repeater.type}`);
+      const config = runtimeForSutran(repeater);
       const { rows: positions } = await this.pool.query(`SELECT * FROM positions WHERE id = $1`, [job.positionId]);
-      if (positions.length === 0) throw new Error('Position not found');
+      if (!positions.length) throw new Error('Posición no encontrada.');
       const pos = positions[0];
-
-      // Convert to NormalizedPosition
-      const normalizedPosition: NormalizedPosition = {
-        messageId: job.id, // using transmission job id as messageId
-        unitId: job.unitId,
-        plate: job.plate,
-        imei: job.imei,
-        latitude: pos.latitude,
-        longitude: pos.longitude,
-        speed: pos.speed,
-        course: pos.heading,
-        altitude: pos.altitude,
-        satellites: pos.satellites,
-        eventTime: pos.eventTime,
-        receivedAt: pos.receivedAt,
+      const position: NormalizedPosition = {
+        messageId: job.id, positionId: pos.id, rawMessageId: pos.rawMessageId,
+        unitId: job.unitId, plate: job.plate, imei: job.imei,
+        latitude: Number(pos.latitude), longitude: Number(pos.longitude),
+        speed: pos.speed === null ? null : Number(pos.speed),
+        course: pos.heading === null ? null : Number(pos.heading),
+        altitude: pos.altitude === null ? null : Number(pos.altitude),
+        satellites: pos.satellites, eventTime: pos.eventTime, receivedAt: pos.receivedAt,
+        parameters: Object.fromEntries((pos.rawData?.blocks || [])
+          .filter((b: any) => b && typeof b.name === 'string')
+          .map((b: any) => [b.name, b.value])),
       };
-
-      // 4. Find adapter
-      const adapter = ADAPTERS[repeaterCode];
-      if (!adapter) throw new Error(`No adapter found for code: ${repeaterCode}`);
-
-      // 5. Send!
-      // In DRY_RUN mode, we could skip the actual HTTP call. We'll rely on the repeater config having DRY_RUN or dummy URL.
-      // But the requirement says "No iniciar envíos reales a SUTRAN todavía".
-      // We will override the URL locally if it's SUTRAN just to be safe, or check process.env.DRY_RUN.
-      
-      const isDryRun = process.env.DRY_RUN === 'true';
-      let result;
-
-      if (isDryRun) {
-         console.log(`[DRY RUN] Simulating send to ${repeaterCode}:`, normalizedPosition.plate);
-         payloadSent = [normalizedPosition]; // Mock payload
-         result = { ok: true, httpStatus: 200, durationMs: 5, responseText: 'DRY_RUN_SIMULATED' };
+      if (process.env.DRY_RUN !== 'false') {
+        status = 'SIMULATED';
+        result = { status: 'SUCCESS', ok: true, retryable: false,
+          durationMs: 0, payload: [position], responseText: 'DRY_RUN_SIMULATED' };
       } else {
-         result = await adapter.send(normalizedPosition, runtimeConfig);
-         payloadSent = result.payload;
+        result = await adapters.SUTRAN.send(position, config);
+        status = result.ok ? 'SENT' : 'FAILED';
+        error = result.ok ? null : (result.errorMessage ?? 'Error desconocido del destino.');
+        if (!result.ok && result.retryable && Number(job.attempts) + 1 < maxAttempts) status = 'RETRY';
       }
-
-      httpCode = result.httpStatus || null;
-      durationMs = result.durationMs || 0;
-      
-      if (result.ok) {
-        newStatus = isDryRun ? 'SIMULATED' : 'SENT';
-        responseReceived = result.response || result.responseText;
-      } else {
-        errorText = result.errorMessage || 'Unknown error';
-        if (result.retryable && job.attempts < 3) {
-          newStatus = 'RETRY';
-        } else {
-          newStatus = 'FAILED';
-        }
-      }
-
-    } catch (err: any) {
-      errorText = err.message;
-      if (job.attempts < 3) newStatus = 'RETRY';
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      // Error de configuración, permisos o datos: no reintentar automáticamente.
+      status = status === 'SKIPPED' ? 'SKIPPED' : 'FAILED';
     }
-
-    // 6. Save result back to transmissions
+    const attempts = Number(job.attempts) + 1;
+    const delaySeconds = Math.min(300, 15 * (2 ** Math.min(attempts - 1, 4)));
     await this.pool.query(`
-      UPDATE transmissions
-      SET 
-        status = $1,
-        "httpCode" = $2,
-        "durationMs" = $3,
-        attempts = attempts + 1,
-        "payloadSent" = $4,
-        "responseReceived" = $5,
-        error = $6
-      WHERE id = $7
-    `, [newStatus, httpCode, durationMs, payloadSent ? JSON.stringify(payloadSent) : null, responseReceived ? JSON.stringify(responseReceived) : null, errorText, job.id]);
+      UPDATE transmissions SET status = $1, "httpCode" = $2, "durationMs" = $3,
+        attempts = $4, "payloadSent" = $5, "responseReceived" = $6, error = $7,
+        "nextAttemptAt" = CASE WHEN $1 = 'RETRY' THEN NOW() + ($8 * interval '1 second') ELSE NULL END,
+        "processingStartedAt" = NULL
+      WHERE id = $9
+    `, [status, result?.httpStatus ?? null, result?.durationMs ?? null, attempts,
+      result?.payload === undefined ? null : JSON.stringify(result.payload),
+      result?.response !== undefined ? JSON.stringify(result.response) :
+        result?.responseText !== undefined ? JSON.stringify(result.responseText) : null,
+      error, delaySeconds, job.id]);
+    if (status === 'FAILED') console.error(`[Worker] ${job.plate} -> ${job.repeaterName}: ${error}`);
   }
 
-  start(intervalMs = 1000) {
-    console.log('[Worker] Started processing jobs');
-    setInterval(() => this.poll(), intervalMs);
+  start(intervalMs = 1000): void {
+    void this.poll();
+    setInterval(() => void this.poll(), intervalMs);
   }
 }

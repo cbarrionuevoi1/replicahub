@@ -20,11 +20,15 @@ export function UnitManager() {
   const fetchData = async () => {
     try {
       setLoading(true);
+      const getJson = async (path: string) => {
+        const response = await fetch(apiUrl(path), { credentials: 'include', cache: 'no-store' });
+        if (!response.ok) throw new Error(`HTTP ${response.status} en ${path}`);
+        return response.json();
+      };
       const [u, p, c] = await Promise.all([
-        fetch(apiUrl('/api/units'), { credentials: 'include' }).then(r => r.json()),
-        fetch(apiUrl('/api/units/pending'), { credentials: 'include' }).then(r => r.json()),
-        fetch(apiUrl('/api/clients'), { credentials: 'include' }).then(r => r.json())
+        getJson('/api/units'), getJson('/api/units/pending'), getJson('/api/clients')
       ]);
+      if (!Array.isArray(u) || !Array.isArray(p) || !Array.isArray(c)) throw new Error('Respuesta inesperada del backend.');
       setUnits(u);
       setPendingUnits(p);
       setClients(c);
