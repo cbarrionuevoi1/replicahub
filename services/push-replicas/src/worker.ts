@@ -1,6 +1,5 @@
 import { Pool } from 'pg';
-import { SutranService } from '@replicahub/repeaters/src/sutran/sutran.service';
-import { NormalizedPosition } from '@replicahub/repeaters/src/core/repeater.types';
+import { SutranService, NormalizedPosition } from '@replicahub/repeaters';
 
 // Registry of adapters. Can be expanded dynamically later
 const ADAPTERS: Record<string, any> = {
