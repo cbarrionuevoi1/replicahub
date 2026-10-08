@@ -57,7 +57,7 @@ export class Worker {
 
     try {
       // 1. Fetch the repeater configuration and code
-      const { rows: repeaters } = await this.pool.query(`SELECT code, config FROM repeaters WHERE id = $1`, [job.repeaterId]);
+      const { rows: repeaters } = await this.pool.query(`SELECT type AS code, config FROM repeaters WHERE id = $1`, [job.repeaterId]);
       if (repeaters.length === 0) throw new Error('Repeater not found');
       
       const repeaterCode = repeaters[0].code;

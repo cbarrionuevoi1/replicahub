@@ -56,7 +56,7 @@ export class Dispatcher {
           ur."repeaterId", 
           ur.config,
           r.name as "repeaterName",
-          r.code as "repeaterCode"
+          r.type as "repeaterCode"
         FROM positions p
         JOIN units u ON p."unitId" = u.id
         LEFT JOIN clients c ON u."clientId" = c.id
