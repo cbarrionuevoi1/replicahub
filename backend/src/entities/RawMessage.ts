@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';
 
 @Entity('raw_messages')
 export class RawMessage {
@@ -9,11 +9,8 @@ export class RawMessage {
   imei: string;
 
   @Column({ type: 'text' })
-  payload: string;
+  rawData: string;
 
-  @Column({ nullable: true })
-  source: string;
-
-  @CreateDateColumn()
-  createdAt: Date;
+  @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
+  receivedAt: Date;
 }

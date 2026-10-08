@@ -6,7 +6,7 @@ export class AuditLog {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ nullable: true })
+  @Column({ type: 'uuid', nullable: true })
   userId: string;
 
   @ManyToOne(() => User, { onDelete: 'SET NULL', nullable: true })

@@ -1,25 +1,22 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';
 
 @Entity('detected_units')
 export class DetectedUnit {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ unique: true })
+  @Column()
   imei: string;
 
-  @Column({ type: 'timestamp' })
-  firstDetectionAt: Date;
+  @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
+  firstSeenAt: Date;
 
-  @Column({ type: 'timestamp' })
-  lastDetectionAt: Date;
+  @Column({ type: 'timestamp', default: () => 'CURRENT_TIMESTAMP' })
+  lastSeenAt: Date;
 
   @Column({ default: 0 })
-  transmissionCount: number;
+  totalMessages: number;
 
-  @CreateDateColumn()
-  createdAt: Date;
-
-  @UpdateDateColumn()
-  updatedAt: Date;
+  @Column({ default: false })
+  linked: boolean;
 }

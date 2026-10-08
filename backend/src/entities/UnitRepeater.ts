@@ -7,14 +7,14 @@ export class UnitRepeater {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column()
+  @Column({ type: 'uuid' })
   unitId: string;
 
   @ManyToOne(() => Unit, unit => unit.unitRepeaters, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'unitId' })
   unit: Unit;
 
-  @Column()
+  @Column({ type: 'uuid' })
   repeaterId: string;
 
   @ManyToOne(() => Repeater, repeater => repeater.unitRepeaters, { onDelete: 'CASCADE' })

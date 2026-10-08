@@ -18,7 +18,7 @@ export class Unit {
   @JoinColumn({ name: 'clientId' })
   client: Client;
 
-  @Column({ nullable: true })
+  @Column({ type: 'uuid', nullable: true })
   clientId: string;
 
   @Column({ nullable: true })

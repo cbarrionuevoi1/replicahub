@@ -5,7 +5,7 @@ export class Transmission {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column()
+  @Column({ type: 'uuid' })
   unitId: string;
 
   @Column()
@@ -17,7 +17,7 @@ export class Transmission {
   @Column({ nullable: true })
   clientName: string;
 
-  @Column()
+  @Column({ type: 'uuid' })
   repeaterId: string;
 
   @Column()
@@ -50,10 +50,10 @@ export class Transmission {
   @Column({ type: 'text', nullable: true })
   error: string;
 
-  @Column({ nullable: true })
+  @Column({ type: 'uuid', nullable: true })
   positionId: string;
 
-  @Column({ nullable: true })
+  @Column({ type: 'uuid', nullable: true })
   rawMessageId: string;
 
   @CreateDateColumn()
