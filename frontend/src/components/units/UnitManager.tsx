@@ -7,6 +7,7 @@ import { UnitFormModal } from './UnitFormModal';
 
 export function UnitManager() {
   const [units, setUnits] = useState<any[]>([]);
+  const [pendingUnits, setPendingUnits] = useState<any[]>([]);
   const [clients, setClients] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -19,11 +20,13 @@ export function UnitManager() {
   const fetchData = async () => {
     try {
       setLoading(true);
-      const [u, c] = await Promise.all([
+      const [u, p, c] = await Promise.all([
         fetch(apiUrl('/api/units'), { credentials: 'include' }).then(r => r.json()),
+        fetch(apiUrl('/api/units/pending'), { credentials: 'include' }).then(r => r.json()),
         fetch(apiUrl('/api/clients'), { credentials: 'include' }).then(r => r.json())
       ]);
       setUnits(u);
+      setPendingUnits(p);
       setClients(c);
       setError('');
     } catch (err: any) {
@@ -37,8 +40,7 @@ export function UnitManager() {
     fetchData();
   }, []);
 
-  const registeredUnits = units.filter(u => u.plate);
-  const pendingUnits = units.filter(u => !u.plate);
+  const registeredUnits = units;
 
   const filteredRegistered = registeredUnits.filter(u => {
     const matchesSearch = !search || u.plate?.toLowerCase().includes(search.toLowerCase()) || u.imei.includes(search);
@@ -78,28 +80,32 @@ export function UnitManager() {
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-warning/5 text-warning-dark text-sm border-b border-warning/20">
-                  <th className="p-4 font-medium">IMEI</th>
-                  <th className="p-4 font-medium">Origen</th>
-                  <th className="p-4 font-medium">Última trama</th>
+                  <th className="p-4 font-medium">UID Wialon</th>
+                  <th className="p-4 font-medium">Primera Recepción</th>
+                  <th className="p-4 font-medium">Última Recepción</th>
+                  <th className="p-4 font-medium">Tramas</th>
                   <th className="p-4 font-medium">Acción</th>
                 </tr>
               </thead>
               <tbody>
-                {pendingUnits.map(u => (
-                  <tr key={u.id} className="border-b border-border/50 hover:bg-gray-50/50">
-                    <td className="p-4 font-medium">{u.imei}</td>
-                    <td className="p-4">
-                      <span className="bg-warning/10 text-warning px-2.5 py-1 rounded-md text-xs font-semibold">AUTOMÁTICO</span>
+                {pendingUnits.map(p => (
+                  <tr key={p.imei} className="border-b border-border/50 hover:bg-gray-50/50">
+                    <td className="p-4 font-medium">{p.imei}</td>
+                    <td className="p-4 text-muted text-sm">
+                      {p.firstTransmissionAt ? new Intl.DateTimeFormat('es-PE', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(p.firstTransmissionAt)) : '-'}
                     </td>
                     <td className="p-4 text-muted text-sm">
-                      {u.lastTransmissionAt ? new Intl.DateTimeFormat('es-PE', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(u.lastTransmissionAt)) : 'Sin datos'}
+                      {p.lastTransmissionAt ? new Intl.DateTimeFormat('es-PE', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(p.lastTransmissionAt)) : '-'}
+                    </td>
+                    <td className="p-4 font-medium">
+                      {p.totalFrames}
                     </td>
                     <td className="p-4">
                       <button 
-                        onClick={() => { setEditingUnit(u); setShowModal(true); }}
+                        onClick={() => { setEditingUnit({ imei: p.imei, isPending: true }); setShowModal(true); }}
                         className="text-primary hover:text-primary/80 font-medium text-sm flex items-center gap-1"
                       >
-                        <Edit2 size={16} /> Completar Datos
+                        <Edit2 size={16} /> Asociar / Registrar
                       </button>
                     </td>
                   </tr>
@@ -201,6 +207,7 @@ export function UnitManager() {
           onClose={() => setShowModal(false)}
           onSuccess={() => { setShowModal(false); fetchData(); }}
           clients={clients}
+          units={registeredUnits}
           editingUnit={editingUnit}
         />
       )}
