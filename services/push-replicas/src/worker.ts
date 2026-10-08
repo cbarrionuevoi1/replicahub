@@ -105,9 +105,9 @@ export class Worker {
       let result;
 
       if (isDryRun) {
-         console.log(`[DRY RUN] Would send to ${repeaterCode}:`, normalizedPosition.plate);
+         console.log(`[DRY RUN] Simulating send to ${repeaterCode}:`, normalizedPosition.plate);
          payloadSent = [normalizedPosition]; // Mock payload
-         result = { ok: true, httpStatus: 200, durationMs: 10, responseText: 'DRY_RUN_OK' };
+         result = { ok: true, httpStatus: 200, durationMs: 5, responseText: 'DRY_RUN_SIMULATED' };
       } else {
          result = await adapter.send(normalizedPosition, runtimeConfig);
          payloadSent = result.payload;
@@ -117,7 +117,7 @@ export class Worker {
       durationMs = result.durationMs || 0;
       
       if (result.ok) {
-        newStatus = 'SENT';
+        newStatus = isDryRun ? 'SIMULATED' : 'SENT';
         responseReceived = result.response || result.responseText;
       } else {
         errorText = result.errorMessage || 'Unknown error';

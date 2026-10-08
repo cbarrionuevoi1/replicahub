@@ -18,11 +18,17 @@ async function bootstrap() {
     await pool.connect();
     console.log('[App] Connected to PostgreSQL');
 
+    // Reset any jobs stuck in PROCESSING from a previous crash
+    const { rowCount } = await pool.query(`UPDATE transmissions SET status = 'PENDING' WHERE status = 'PROCESSING'`);
+    if (rowCount && rowCount > 0) {
+      console.log(`[App] Recovered ${rowCount} jobs stuck in PROCESSING state.`);
+    }
+
     const dispatcher = new Dispatcher(pool);
     const worker = new Worker(pool);
 
     // Start polling DB for new positions every 3 seconds
-    dispatcher.start(3000);
+    await dispatcher.start(3000);
     
     // Start processing jobs every 1 second
     worker.start(1000);
