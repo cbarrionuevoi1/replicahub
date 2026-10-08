@@ -1,0 +1,24 @@
+{
+  "name": "push-replicas",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev": "ts-node src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@replicahub/repeaters": "file:../repeaters",
+    "@types/node": "^26.6.4",
+    "@types/pg": "^8.23.1",
+    "dotenv": "^18.0.6",
+    "pg": "^8.23.1",
+    "ts-node": "^10.9.2",
+    "typescript": "^7.0.2"
+  }
+}
