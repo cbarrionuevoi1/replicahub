@@ -116,15 +116,18 @@ export class Worker {
     // Un CTE guarda de forma ATÓMICA el último resultado y un intento inmutable.
     // El primer HTTP 403, el segundo HTTP 503, etc. quedan disponibles en el historial.
     // No se guardan tokens ni cabeceras de autenticación.
+    // IMPORTANTE: status es VARCHAR en PostgreSQL. El mismo $1 aparece en un
+    // UPDATE, una comparación CASE y un INSERT: tiparlo explícitamente como
+    // text en los tres lugares evita el error 42P08 (text vs character varying).
     const payload = result?.payload === undefined ? null : JSON.stringify(result.payload);
     const response = result?.response !== undefined ? JSON.stringify(result.response) :
       result?.responseText !== undefined ? JSON.stringify(result.responseText) : null;
     await this.pool.query(`
       WITH updated AS (
-        UPDATE transmissions SET status = $1, "httpCode" = $2, "durationMs" = $3,
+        UPDATE transmissions SET status = $1::text, "httpCode" = $2, "durationMs" = $3,
           attempts = $4, "cycleAttempts" = COALESCE("cycleAttempts", 0) + 1,
           "payloadSent" = $5::json, "responseReceived" = $6::json, error = $7,
-          "nextAttemptAt" = CASE WHEN $1 = 'RETRY' THEN NOW() + ($8 * interval '1 second') ELSE NULL END,
+          "nextAttemptAt" = CASE WHEN $1::text = 'RETRY' THEN NOW() + ($8 * interval '1 second') ELSE NULL END,
           "processingStartedAt" = NULL, "lastAttemptAt" = $9,
           "lastResponseAt" = CASE WHEN $2::integer IS NOT NULL THEN NOW() ELSE NULL END
         WHERE id = $10 RETURNING id
@@ -133,7 +136,7 @@ export class Worker {
         "transmissionId", "attemptNo", "attemptedAt", "completedAt",
         status, "httpCode", "durationMs", "payloadSent", "responseReceived", error
       )
-      SELECT id, $4, $9, NOW(), $1, $2, $3, $5::json, $6::json, $7 FROM updated
+      SELECT id, $4, $9, NOW(), $1::text, $2, $3, $5::json, $6::json, $7 FROM updated
       ON CONFLICT ("transmissionId", "attemptNo") DO NOTHING
     `, [status, result?.httpStatus ?? null, result?.durationMs ?? null, attempts,
       payload, response, error, delaySeconds, startedAt, job.id]);

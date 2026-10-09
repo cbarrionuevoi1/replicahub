@@ -42,6 +42,22 @@ function createPool() {
     }
   };
 }
+test('regresión PostgreSQL 42P08: el estado $1 tiene tipo explícito consistente', async () => {
+  // El mock comprueba la sentencia enviada al driver. Una ejecución con
+  // PostgreSQL real se valida posteriormente en el VPS.
+  const old = global.fetch;
+  global.fetch = async () => new Response('{"status":200}', {status:200});
+  try {
+    const pool = createPool();
+    await new Worker(pool).poll();
+    assert.equal(pool.status.updated[0], 'SENT');
+    const sql = pool.status.sql;
+    assert.equal((sql.match(/\$1::text\b/g) || []).length, 3,
+      'UPDATE, CASE e INSERT deben tipar el mismo $1 como text');
+    assert.doesNotMatch(sql, /\$1(?![0-9]|::text\b)/,
+      'No debe quedar un $1 sin casteo explícito');
+  } finally {global.fetch = old;}
+});
 test('el token se descifra con la clave compartida',()=> {
   assert.equal(decryptRepeaterToken(encryptedToken),'my-test-token');
 });
