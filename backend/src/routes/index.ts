@@ -22,10 +22,9 @@ router.get('/health', async (_req, res) => {
 
 router.get('/stats/dashboard', requireAuth, dashboardStats);
 router.get('/transmissions', requireAuth, listTransmissions);
+router.get('/transmissions/export', requireAuth, exportTransmissions);
 router.get('/transmissions/:id', requireAuth, transmissionDetail);
 router.post('/transmissions/:id/retry', requireAuth, requireRole(UserRole.ADMIN, UserRole.OPERATOR), retryTransmission);
-
-router.get('/transmissions/export', requireAuth, exportTransmissions);
 
 router.get('/users', requireAuth, requireRole(UserRole.ADMIN), listUsers);
 router.post('/users', requireAuth, requireRole(UserRole.ADMIN), createUser);

@@ -42,6 +42,15 @@ export class Transmission {
   processingStartedAt: Date | null;
 
   @Column({ type: 'timestamp', nullable: true })
+  lastAttemptAt: Date | null;
+
+  @Column({ type: 'timestamp', nullable: true })
+  lastResponseAt: Date | null;
+
+  @Column({ type: 'int', default: 0 })
+  cycleAttempts: number;
+
+  @Column({ type: 'timestamp', nullable: true })
   eventTime: Date;
 
   @Column({ type: 'timestamp', nullable: true })

@@ -9,7 +9,7 @@ module.exports = {
       watch: false,
       max_memory_restart: '200M',
       env: {
-        // Respeta DRY_RUN del .env (por seguridad por defecto simula).
+        // El servicio realiza envíos reales y almacena respuestas/errores.
         NODE_ENV: 'production'
       }
     }

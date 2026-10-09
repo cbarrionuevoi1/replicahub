@@ -1,3 +1,5 @@
+> **Actualización 09/10/2026:** Este documento describe la revisión anterior. Para el cambio vigente (envíos reales sin `DRY_RUN`, Dashboard y filtros con respuestas HTTP) ver [CAMBIOS_2026-10-09.md](CAMBIOS_2026-10-09.md).
+
 # ReplicaHub — Revisión lógica 08/10/2026
 
 ## Estado real

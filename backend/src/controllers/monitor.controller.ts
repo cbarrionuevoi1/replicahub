@@ -1,104 +1,110 @@
 import { Request, Response } from 'express';
 import { AppDataSource } from '../config/database';
+import { transmissionFilters } from './transmission-filters';
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const validStatuses = new Set(['PENDING','PROCESSING','RETRY','FAILED','SENT','SIMULATED','SKIPPED']);
+
+const dataError = (res: Response, error: unknown, message: string) => {
+  console.error(`[monitor] ${message}`, error);
+  const pgCode = (error as {code?: string})?.code;
+  if (pgCode === '42703' || pgCode === '42P01') {
+    return res.status(503).json({ error: 'Esquema PostgreSQL incompleto. Verifica las migraciones de ReplicaHub.', code: 'SCHEMA_OUTDATED' });
+  }
+  return res.status(500).json({ error: message });
+};
 
 export const dashboardStats = async (req: Request, res: Response) => {
+  const clientId = typeof req.query.clientId === 'string' ? req.query.clientId : '';
+  if (clientId && !uuid.test(clientId)) return res.status(400).json({ error: 'ID de cliente inválido.' });
   try {
-    const clientId = typeof req.query.clientId === 'string' && uuid.test(req.query.clientId) ? req.query.clientId : null;
+    // Los RAW antiguos no tienen clientId: la asociación con cliente se resuelve por IMEI.
+    // Subconsultas independientes evitan multiplicar resultados al combinar unidades y repetidores.
     const [totals, repeaters] = await Promise.all([
       AppDataSource.query(`
         SELECT
           (SELECT COUNT(*)::int FROM raw_messages raw
-           WHERE $1::uuid IS NULL OR raw."clientId" = $1::uuid) AS received,
-          (SELECT COUNT(*)::int FROM transmissions t
-           JOIN units u ON t."unitId" = u.id
+           WHERE $1::uuid IS NULL OR EXISTS
+             (SELECT 1 FROM units ux WHERE (ux.imei = raw.imei OR ux."wialonUniqueId" = raw.imei) AND ux."clientId" = $1::uuid)) AS received,
+          (SELECT COUNT(*)::int FROM transmissions t JOIN units u ON t."unitId" = u.id
            WHERE t.status = 'SENT' AND ($1::uuid IS NULL OR u."clientId" = $1::uuid)) AS sent,
-          (SELECT COUNT(*)::int FROM transmissions t
-           JOIN units u ON t."unitId" = u.id
-           WHERE t.status IN ('FAILED','RETRY') AND ($1::uuid IS NULL OR u."clientId" = $1::uuid)) AS errors,
-          (SELECT COUNT(*)::int FROM transmissions t
-           JOIN units u ON t."unitId" = u.id
-           WHERE t.status = 'SIMULATED' AND ($1::uuid IS NULL OR u."clientId" = $1::uuid)) AS simulated,
-          (SELECT COUNT(*)::int FROM transmissions t
-           JOIN units u ON t."unitId" = u.id
-           WHERE t.status IN ('PENDING','PROCESSING') AND ($1::uuid IS NULL OR u."clientId" = $1::uuid)) AS pending
-      `, [clientId]),
+          (SELECT COUNT(*)::int FROM transmissions t JOIN units u ON t."unitId" = u.id
+           WHERE t.status IN ('FAILED', 'RETRY') AND ($1::uuid IS NULL OR u."clientId" = $1::uuid)) AS errors
+      `, [clientId || null]),
       AppDataSource.query(`
         SELECT r.id, r.name, r.type, r.active,
-          COUNT(DISTINCT ur."unitId") FILTER (WHERE ur.active AND u.active AND ($1::uuid IS NULL OR u."clientId" = $1::uuid))::int AS "assignedUnits",
-          COUNT(DISTINCT t."unitId") FILTER (WHERE t.status = 'SENT' AND ($1::uuid IS NULL OR u."clientId" = $1::uuid))::int AS "sentUnits"
-        FROM repeaters r
-        LEFT JOIN unit_repeaters ur ON ur."repeaterId" = r.id
-        LEFT JOIN units u ON u.id = ur."unitId"
-        LEFT JOIN transmissions t ON t."repeaterId" = r.id AND t."unitId" = ur."unitId"
-          AND t."createdAt" > NOW() - interval '24 hours'
-        GROUP BY r.id, r.name, r.type, r.active ORDER BY r.name
-      `, [clientId]),
+          (SELECT COUNT(DISTINCT ur."unitId")::int FROM unit_repeaters ur
+           JOIN units u ON u.id = ur."unitId"
+           WHERE ur."repeaterId" = r.id AND ur.active = TRUE AND u.active = TRUE
+             AND ($1::uuid IS NULL OR u."clientId" = $1::uuid)) AS "assignedUnits",
+          (SELECT COUNT(DISTINCT t."unitId")::int FROM transmissions t
+           JOIN units u ON u.id = t."unitId"
+           JOIN unit_repeaters ur ON ur."unitId" = u.id AND ur."repeaterId" = r.id AND ur.active = TRUE
+           WHERE t."repeaterId" = r.id AND t.status = 'SENT'
+             AND COALESCE(t."lastAttemptAt", t."createdAt") >= NOW() - interval '24 hours'
+             AND u.active = TRUE AND ($1::uuid IS NULL OR u."clientId" = $1::uuid)) AS "sentUnits"
+        FROM repeaters r ORDER BY r.name
+      `, [clientId || null]),
     ]);
     res.json({ totals: totals[0], repeaters });
-  } catch (error) {
-    console.error('[stats]', error);
-    res.status(500).json({ error: 'Error al consultar estadísticas.' });
-  }
+  } catch (error) { dataError(res, error, 'No se pudieron consultar las estadísticas.'); }
 };
 
 export const listTransmissions = async (req: Request, res: Response) => {
-  const status = typeof req.query.status === 'string' && validStatuses.has(req.query.status) ? req.query.status : null;
-  const search = typeof req.query.search === 'string' ? req.query.search.trim().slice(0, 100) : '';
-  const repeaterId = typeof req.query.repeaterId === 'string' && uuid.test(req.query.repeaterId) ? req.query.repeaterId : null;
-  const clientId = typeof req.query.clientId === 'string' && uuid.test(req.query.clientId) ? req.query.clientId : null;
-  const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 50));
-  const offset = Math.max(0, Math.min(1000000, Number(req.query.offset) || 0));
+  let filters;
+  try { filters = transmissionFilters(req); }
+  catch (err) { return res.status(400).json({ error: (err as Error).message }); }
+  const requestedLimit = Number(req.query.limit ?? 100);
+  const requestedOffset = Number(req.query.offset ?? 0);
+  if (!Number.isSafeInteger(requestedLimit) || requestedLimit < 1 || requestedLimit > 200 ||
+      !Number.isSafeInteger(requestedOffset) || requestedOffset < 0 || requestedOffset > 1000000) {
+    return res.status(400).json({ error: 'Parámetros de paginación inválidos.' });
+  }
   try {
-    const values = [status, search ? `%${search}%` : null, repeaterId, clientId, limit, offset];
     const rows = await AppDataSource.query(`
       SELECT t.id, t.plate, t.imei, t."clientName", t."repeaterName", t.status,
         t."httpCode", t.attempts, t.error, t."eventTime", t."receivedAt", t."createdAt",
-        t."durationMs", t."nextAttemptAt", t."positionId", t."rawMessageId"
+        t."durationMs", t."lastAttemptAt", t."lastResponseAt", t."nextAttemptAt",
+        t."positionId", t."rawMessageId",
+        (t."httpCode" IS NOT NULL) AS "httpResponded"
       FROM transmissions t LEFT JOIN units u ON u.id = t."unitId"
-      WHERE ($1::text IS NULL OR t.status = $1)
-        AND ($2::text IS NULL OR t.plate ILIKE $2 OR t.imei ILIKE $2)
-        AND ($3::uuid IS NULL OR t."repeaterId" = $3)
-        AND ($4::uuid IS NULL OR u."clientId" = $4)
-      ORDER BY t."createdAt" DESC, t.id DESC LIMIT $5 OFFSET $6
-    `, values);
+      ${filters.where}
+      ORDER BY t."createdAt" DESC, t.id DESC
+      LIMIT $${filters.params.length + 1} OFFSET $${filters.params.length + 2}
+    `, [...filters.params, requestedLimit, requestedOffset]);
     res.json(rows);
-  } catch (error) {
-    console.error('[transmissions]', error);
-    res.status(500).json({ error: 'No se pudieron consultar las transmisiones.' });
-  }
+  } catch (err) { dataError(res, err, 'No se pudieron consultar las transmisiones.'); }
 };
 
 export const transmissionDetail = async (req: Request, res: Response) => {
   if (!uuid.test(req.params.id as string)) return res.status(400).json({ error: 'ID inválido.' });
   try {
     const rows = await AppDataSource.query(`
-      SELECT id, plate, imei, status, attempts, error, "httpCode", "durationMs", "payloadSent",
-        "responseReceived", "eventTime", "receivedAt", "createdAt", "nextAttemptAt", "rawMessageId"
+      SELECT id, plate, imei, "clientName", "repeaterName", status, attempts, error,
+        "httpCode", "durationMs", "payloadSent", "responseReceived", "eventTime",
+        "receivedAt", "createdAt", "lastAttemptAt", "lastResponseAt", "nextAttemptAt", "rawMessageId",
+        ("httpCode" IS NOT NULL) AS "httpResponded"
       FROM transmissions WHERE id = $1
     `, [req.params.id]);
     if (!rows.length) return res.status(404).json({ error: 'Transmisión no encontrada.' });
-    res.json(rows[0]);
-  } catch (error) {
-    console.error('[transmission detail]', error);
-    res.status(500).json({ error: 'No se pudo consultar el detalle.' });
-  }
+    const attempts = await AppDataSource.query(`
+      SELECT "attemptNo", "attemptedAt", "completedAt", status, "httpCode", "durationMs",
+        "payloadSent", "responseReceived", error
+      FROM transmission_attempts WHERE "transmissionId" = $1 ORDER BY "attemptNo" DESC
+    `, [req.params.id]);
+    res.json({ ...rows[0], attemptHistory: attempts });
+  } catch (err) { dataError(res, err, 'No se pudo consultar el detalle.'); }
 };
 
 export const retryTransmission = async (req: Request, res: Response) => {
   if (!uuid.test(req.params.id as string)) return res.status(400).json({ error: 'ID inválido.' });
   try {
+    // Se conservan attempts e historial previo: un reenvío real no borra auditoría.
     const result = await AppDataSource.query(`
-      UPDATE transmissions SET status = 'PENDING', attempts = 0,
-        "nextAttemptAt" = NULL, "processingStartedAt" = NULL, error = NULL
-      WHERE id = $1 AND status IN ('FAILED', 'SIMULATED') RETURNING id
+      UPDATE transmissions SET status = 'PENDING', "cycleAttempts" = 0, "nextAttemptAt" = NULL,
+        "processingStartedAt" = NULL, error = NULL
+      WHERE id = $1 AND status IN ('FAILED', 'SIMULATED', 'SKIPPED') RETURNING id
     `, [req.params.id]);
-    if (!result.length) return res.status(409).json({ error: 'Solo se pueden reintentar transmisiones fallidas o simuladas.' });
+    if (!result.length) return res.status(409).json({ error: 'Solo se pueden reprocesar transmisiones fallidas, omitidas o simuladas históricas.' });
     res.json({ success: true });
-  } catch (error) {
-    console.error('[retry]', error);
-    res.status(500).json({ error: 'No se pudo reintentar.' });
-  }
+  } catch (err) { dataError(res, err, 'No se pudo solicitar el reenvío.'); }
 };

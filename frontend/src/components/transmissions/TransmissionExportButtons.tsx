@@ -6,8 +6,8 @@ import { apiUrl } from '@/lib/api';
 
 type ExportFormat = 'xlsx' | 'csv';
 
-export default function TransmissionExportButtons({ clientId = '', repeaterId = '', status = '' }: {
-  clientId?: string; repeaterId?: string; status?: string;
+export default function TransmissionExportButtons({ clientId = '', repeaterId = '', status = '', search = '', dateFrom = '', dateTo = '', dateField = 'createdAt' }: {
+  clientId?: string; repeaterId?: string; status?: string; search?: string; dateFrom?: string; dateTo?: string; dateField?: string;
 }) {
   const [exporting, setExporting] = useState<ExportFormat | null>(null);
   const [error, setError] = useState('');
@@ -25,6 +25,10 @@ export default function TransmissionExportButtons({ clientId = '', repeaterId = 
       if (clientId) params.set('clientId', clientId);
       if (repeaterId) params.set('repeaterId', repeaterId);
       if (status) params.set('status', status);
+      if (search.trim()) params.set('search', search.trim());
+      if (dateFrom) params.set('dateFrom', dateFrom);
+      if (dateTo) params.set('dateTo', dateTo);
+      params.set('dateField', dateField);
       const response = await fetch(
         apiUrl(`/api/transmissions/export?${params}`),
         {

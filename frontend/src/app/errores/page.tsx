@@ -38,6 +38,6 @@ export default function Errores() {
       <td className="p-3">{new Date(r.createdAt).toLocaleString('es-PE')}</td><td className="p-3">{r.attempts}</td>
       <td className="p-3"><button disabled={busy !== null} onClick={() => void retry(r.id)} className="px-3 py-2 border rounded-lg text-primary disabled:opacity-50">Reintentar</button></td>
     </tr>)}{!rows.length && <tr><td colSpan={7} className="p-8 text-center text-muted">No hay transmisiones fallidas.</td></tr>}</tbody></table></div>
-    <p className="text-xs text-muted">Reintentar realiza un envío real si el servicio de réplicas está configurado con DRY_RUN=false. Verifica antes las credenciales y el destino.</p>
+    <p className="text-xs text-muted">Reintentar solicita un envío real a la API de destino; verifica las credenciales y la configuración.</p>
   </div>;
 }

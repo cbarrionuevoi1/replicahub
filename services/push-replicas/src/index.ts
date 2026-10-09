@@ -17,6 +17,9 @@ async function bootstrap() {
   try {
     await pool.query('SELECT 1');
     console.log('[App] Connected to PostgreSQL');
+    // Comprobar migración ANTES de reclamar trabajos para no dejar PROCESSING bloqueados.
+    await pool.query('SELECT "lastAttemptAt", "cycleAttempts" FROM transmissions LIMIT 0');
+    await pool.query('SELECT id FROM transmission_attempts LIMIT 0');
     // Compatibilidad: trabajos PROCESSING de la versión antigua no tenían marca temporal.
     await pool.query(`UPDATE transmissions SET status='RETRY'
       WHERE status='PROCESSING' AND "processingStartedAt" IS NULL`);
@@ -31,7 +34,7 @@ async function bootstrap() {
     // Start processing jobs every 1 second
     worker.start(1000);
 
-    console.log(`[App] service-push-replicas is running (DRY_RUN=${process.env.DRY_RUN})`);
+    console.log('[App] service-push-replicas: envíos REALES habilitados (sin simulación)');
   } catch (err) {
     console.error('[App] Failed to start:', err);
     process.exit(1);

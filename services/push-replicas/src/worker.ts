@@ -68,6 +68,7 @@ export class Worker {
     let result: RepeaterSendResult | null = null;
     let error: string | null = null;
     let maxAttempts = 1;
+    const startedAt = new Date();
     try {
       const { rows } = await this.pool.query(`
         SELECT r.*, ur.config AS "unitConfig", ur.active AS "assignmentActive", u.active AS "unitActive"
@@ -100,16 +101,11 @@ export class Worker {
           .filter((b: any) => b && typeof b.name === 'string')
           .map((b: any) => [b.name, b.value])),
       };
-      if (process.env.DRY_RUN !== 'false') {
-        status = 'SIMULATED';
-        result = { status: 'SUCCESS', ok: true, retryable: false,
-          durationMs: 0, payload: [position], responseText: 'DRY_RUN_SIMULATED' };
-      } else {
-        result = await adapters.SUTRAN.send(position, config);
-        status = result.ok ? 'SENT' : 'FAILED';
-        error = result.ok ? null : (result.errorMessage ?? 'Error desconocido del destino.');
-        if (!result.ok && result.retryable && Number(job.attempts) + 1 < maxAttempts) status = 'RETRY';
-      }
+      // Solo tráfico REAL; DRY_RUN heredado se ignora deliberadamente.
+      result = await adapters.SUTRAN.send(position, config);
+      status = result.ok ? 'SENT' : 'FAILED';
+      error = result.ok ? null : (result.errorMessage ?? 'Error desconocido del destino.');
+      if (!result.ok && result.retryable && Number(job.cycleAttempts || 0) + 1 < maxAttempts) status = 'RETRY';
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
       // Error de configuración, permisos o datos: no reintentar automáticamente.
@@ -117,17 +113,30 @@ export class Worker {
     }
     const attempts = Number(job.attempts) + 1;
     const delaySeconds = Math.min(300, 15 * (2 ** Math.min(attempts - 1, 4)));
+    // Un CTE guarda de forma ATÓMICA el último resultado y un intento inmutable.
+    // El primer HTTP 403, el segundo HTTP 503, etc. quedan disponibles en el historial.
+    // No se guardan tokens ni cabeceras de autenticación.
+    const payload = result?.payload === undefined ? null : JSON.stringify(result.payload);
+    const response = result?.response !== undefined ? JSON.stringify(result.response) :
+      result?.responseText !== undefined ? JSON.stringify(result.responseText) : null;
     await this.pool.query(`
-      UPDATE transmissions SET status = $1, "httpCode" = $2, "durationMs" = $3,
-        attempts = $4, "payloadSent" = $5, "responseReceived" = $6, error = $7,
-        "nextAttemptAt" = CASE WHEN $1 = 'RETRY' THEN NOW() + ($8 * interval '1 second') ELSE NULL END,
-        "processingStartedAt" = NULL
-      WHERE id = $9
+      WITH updated AS (
+        UPDATE transmissions SET status = $1, "httpCode" = $2, "durationMs" = $3,
+          attempts = $4, "cycleAttempts" = COALESCE("cycleAttempts", 0) + 1,
+          "payloadSent" = $5::json, "responseReceived" = $6::json, error = $7,
+          "nextAttemptAt" = CASE WHEN $1 = 'RETRY' THEN NOW() + ($8 * interval '1 second') ELSE NULL END,
+          "processingStartedAt" = NULL, "lastAttemptAt" = $9,
+          "lastResponseAt" = CASE WHEN $2::integer IS NOT NULL THEN NOW() ELSE NULL END
+        WHERE id = $10 RETURNING id
+      )
+      INSERT INTO transmission_attempts (
+        "transmissionId", "attemptNo", "attemptedAt", "completedAt",
+        status, "httpCode", "durationMs", "payloadSent", "responseReceived", error
+      )
+      SELECT id, $4, $9, NOW(), $1, $2, $3, $5::json, $6::json, $7 FROM updated
+      ON CONFLICT ("transmissionId", "attemptNo") DO NOTHING
     `, [status, result?.httpStatus ?? null, result?.durationMs ?? null, attempts,
-      result?.payload === undefined ? null : JSON.stringify(result.payload),
-      result?.response !== undefined ? JSON.stringify(result.response) :
-        result?.responseText !== undefined ? JSON.stringify(result.responseText) : null,
-      error, delaySeconds, job.id]);
+      payload, response, error, delaySeconds, startedAt, job.id]);
     if (status === 'FAILED') console.error(`[Worker] ${job.plate} -> ${job.repeaterName}: ${error}`);
   }
 

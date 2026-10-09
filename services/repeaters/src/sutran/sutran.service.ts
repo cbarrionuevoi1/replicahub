@@ -12,7 +12,7 @@ import { validateSutranConfig } from './sutran.validator';
 function sutranResponseIndicatesFailure(body: unknown): boolean {
   if (!body || typeof body !== 'object') return false;
   const value = body as SutranResponseLike & { success?: boolean; ok?: boolean; error?: unknown };
-  if (value.success === false || value.ok === false || value.error === true ||
+  if (value.success === false || value.ok === false || value.error === true || (typeof value.error === 'object' && value.error !== null) ||
       (typeof value.error === 'string' && value.error.trim().length > 0)) return true;
   const rawStatus = value.status ?? value.code;
   const status = Number(rawStatus);
@@ -25,6 +25,7 @@ function responseErrorMessage(body: unknown, fallback: string): string {
   if (body && typeof body === 'object') {
     const value = body as SutranResponseLike;
     if (typeof value.message === 'string' && value.message.trim()) return value.message;
+    if (typeof value.error === 'string' && value.error.trim()) return value.error;
     if (typeof value.result === 'string' && value.result.trim()) return value.result;
   }
   return fallback;
@@ -124,7 +125,18 @@ export class SutranService implements RepeaterAdapter<SutranRuntimeConfig> {
         signal,
       );
 
-      const body = await readResponseBody(response);
+      let body;
+      try {
+        body = await readResponseBody(response);
+      } catch (e) {
+        // Los encabezados HTTP ya llegaron: registrar el código incluso si falló la lectura del cuerpo.
+        return {
+          status: 'ERROR', ok: false, retryable: true, httpStatus: response.status,
+          durationMs: Date.now() - startedAt, payload,
+          errorCode: 'RESPONSE_BODY_ERROR',
+          errorMessage: `SUTRAN respondió HTTP ${response.status}, pero no se pudo leer el cuerpo: ${e instanceof Error ? e.message : String(e)}`,
+        };
+      }
       const rejectedByBody = sutranResponseIndicatesFailure(body.data);
       const ok = response.ok && !rejectedByBody;
 

@@ -48,3 +48,14 @@ test('no se envia si la placa invalida', async () => {
   assert.equal(result.ok, false);
   assert.equal(result.errorCode, 'INVALID_PAYLOAD');
 });
+
+test('HTTP 200 con rechazo en el JSON no se registra como enviado', async () => {
+  const previous = global.fetch;
+  global.fetch = async () => new Response('{"success":false,"error":"IP no autorizada"}', {status: 200});
+  try {
+    const r = await service.send(position, config);
+    assert.equal(r.ok, false);
+    assert.equal(r.httpStatus, 200);
+    assert.match(r.errorMessage, /IP no autorizada/);
+  } finally { global.fetch = previous; }
+});
